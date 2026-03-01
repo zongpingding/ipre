@@ -1,0 +1,130 @@
+#!/usr/bin/env zsh
+
+# NOTE: Dependency:
+# 1. chafa    - preview image in terminal
+# 2. eza      - preview directory structure
+# 3. tree     - preview zip/tar structure
+# 4. pdftoppm - convert pdf to PNG-format image
+# 5. bat      - preview text/source files
+# 6. ffmpegthumbnailer - video thumbnailer preview
+
+local file="$1"
+local ext="${file:l}"
+local view_size="x16" # 'WxH' -> set width automatically
+local cache_dir="$HOME/.cache/pre_thumbs"
+# local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/pre_thumbs"
+local MAX_DIR_ITEMS=200
+local MAX_FIX=3
+
+
+# thumb image cache
+mkdir -p "$cache_dir"
+thumb_cache_path() {
+    local file="$1"
+    local prefix="$2"
+    local gen_cmd="$3"
+
+    # cache label
+    local mtime key
+    mtime=$(stat -c %Y "$file" 2>/dev/null) || return 1
+    key=$(printf "%s_%s" "$file" "$mtime" | md5sum | awk '{print $1}')
+
+    # if not-cached, generate it
+    local img="$cache_dir/${prefix}_${key}.png"
+    if [[ ! -f "$img" ]]; then
+        "$gen_cmd" "$file" "$img"
+    fi
+    echo "$img"
+}
+
+# thumb image generate
+gen_video_thumb() {
+    local file="$1"
+    local img="$2"
+    ffmpegthumbnailer -s 0 -i "$file" -o "$img" &>/dev/null
+}
+gen_pdf_thumb() {
+    local file="$1"
+    local img="$2"
+    # use '-singlefile' to remove the number suffix
+    pdftoppm -f 1 -singlefile -png -rx 100 -ry 100 \
+             "$file" "${img%.png}" >/dev/null 2>&1
+}
+
+# auto re-generate for damaged picture
+img_preview_fix() {
+    local file="$1"
+    local img="$2"
+    local gen_cmd="$3"
+
+    # auto fix damaged picture 'MAX_FIX' times
+    if ! chafa --size=$view_size --animate=off "$img"; then
+        echo "$img" | wl-copy 
+        for ((i=1; i<=$MAX_FIX; i++)); do
+            if [[ -f "$img" ]]; then
+                rm -f "$img" 
+            fi
+            "$gen_cmd" "$file" "$img"
+        done
+        chafa --size=$view_size --animate=off "$img"
+    else
+        chafa --size=$view_size --animate=off "$img"
+    fi
+}
+
+
+# tar(.gz)/zip file discription
+compress_file_info() {
+    file "$file" | fmt -s
+    printf "\nContents structure:\n\n"
+}
+
+# check if 'file' is a directory
+if [[ -d "$file" ]]; then
+    eza -T --icons=always --color=always "$file" | head -$MAX_DIR_ITEMS
+    return
+fi
+# match simple text file with NO ext
+if file -b --mime-encoding "$file" | grep -Eq '^(us-ascii|utf-8)$' \
+   && [[ "${file##*/}" != *.* ]]; then
+    cat "$file"
+fi
+case "$ext" in
+    # text files
+    *.txt|*.md|*.org|*.json|*.yaml|*.yml|*.log|*.c|*.cpp|*.h|*.py|*.sh|*.zsh|*.el|*.tex)
+        bat --style=numbers --color=always --line-range :$MAX_DIR_ITEMS "$file"
+        ;;
+    # image
+    *.png|*.jpg|*.jpeg|*.svg|*.gif|*.webp|*.bmp|*.tiff)
+        chafa --size=$view_size --animate=off "$file"
+        ;;
+    # document
+    *.pdf)
+        local img=$(thumb_cache_path "$file" "PDF" gen_pdf_thumb)
+        img_preview_fix "$file" "$img" gen_pdf_thumb 
+        ;;
+    # video
+    *.mp4|*.mkv|*.mov|*.mpv|*.avi|*.wmv|*.flv|*.webm|*.ts|*.m2ts|*.vob|*.3gp)
+        local img=$(thumb_cache_path "$file" "VIDEO" gen_video_thumb)
+        img_preview_fix "$file" "$img" gen_vedio_thumb 
+        ;;
+    # tar(.gz)
+    *.tar|*.tar.gz|*.tgz|*.tar.xz|*.txz|*.tar.bz2|*.tbz2)
+        compress_file_info
+        tar -tf "$file" | head -$MAX_DIR_ITEMS \
+            | tree --fromfile . \
+            | sed '1d' | head -n -2
+        ;;
+    # zip
+    *.zip)
+        compress_file_info
+        unzip -l "$file" \
+            | head -$MAX_DIR_ITEMS | head -n -2 | tail -n -3 \
+            | awk '{print $NF}' | tree --fromfile . \
+            | sed '1d' | head -n -2
+        ;;
+    # others
+    *)
+        file "$file" | fmt -s
+        ;;
+esac
