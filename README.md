@@ -6,25 +6,23 @@
 
 My terminal - `foot`, shell - `zsh`.
 
-1. fd/fzf   - the kernel
-2. imv      - view image
-3. zathura  - view pdf
-4. nvim     - text editor
+1. `fd/fzf`   - the kernel
+2. `fmv`      - view image
+3. `fathura`  - view pdf
+4. `fvim`     - text editor
 
-The following items are required by the 'pre' command:
+The following programs are required by the `pre` command:
 
-1. chafa    - preview image in terminal
-2. eza      - preview directory structure
-3. tree     - preview zip/tar structure
-4. pdftoppm - convert pdf to PNG-format image
-4. bat      - preview text/source files
-6. ffmpegthumbnailer - video thumbnailer preview
+1. `chafa`    - print image in terminal(the kernel)
+2. `eza`      - preview directory
+3. `bat`      - preview text/source files
+4. `pdftoppm` - preview pdf files
+5. `ddjvu`    - preview djvu files
+6. `magick`   - preview fonts
+7. `ffmpegthumbnailer`      - preview videos
+8. `archivemount/fuse-zip`  - preview tar(.gz) or zip files
+9. `gnome-epub-thumbnailer` - preview EPub or MOBI books
 
-Usage:
-
-* set `IPRE_CMD` to change the default search method;
-* set `EDITOR` to change the default text file opener command;
-* if pdf-preview does NOT working, clean the folder `~/.cache/pre_thumbs`
 
 # Usage
 Add this script to your `PATH`.
@@ -35,6 +33,8 @@ Provide a filename as an argument like this:
 $ pre test.pdf
 $ pre test.mp4
 $ pre test.png
+$ pre times.ttf
+$ pre test.epub
 ```
 
 ## play with fzf
@@ -93,7 +93,7 @@ function ipre() {
         *.png|*.jpg|*.jpeg|*.gif|*.webp|*.bmp|*.tiff)
             nohup imv "$file" &>/dev/null &
             ;;
-        *.pdf)
+        *.pdf|*.djvu|*.epub|*.mobi)
             nohup zathura "$file" &>/dev/null &
             ;;
         *.tar|*.tar.gz|*.tgz|*.tar.xz|*.txz|*.tar.bz2|*.tbz2)
@@ -109,3 +109,22 @@ function ipre() {
     esac
 }
 ```
+
+Some note:
+
+* set `IPRE_CMD` to change the default search method;
+* set `EDITOR` to change the default text file opener command;
+* you can add key bindings to `fzf` using the `--bind` option.
+
+
+# Config
+Configure this program by environment variables. 
+
+* set `EZA_ARG` to change the default argument of `eza`;
+* set `FONT_TEXT` to change the sample text in font-preview.
+
+
+# WARNING
+
+* if pdf-preview does NOT working, clean the folder `~/.cache/pre_thumbs`.
+* before clear the cache folder `~/.cache/pre_thumbs`, run `umount ~/.cache/pre_thumbs/mnt` first !!!
