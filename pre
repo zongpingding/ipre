@@ -133,6 +133,7 @@ img_preview_fix() {
     done
     if [[ "$success" -eq 0 ]]; then
         printf "\n\nERROR: Failed to generate preview image !"
+        exit 1
     fi
 }
 
@@ -140,7 +141,7 @@ img_preview_fix() {
 # check if 'file' is a directory
 if [[ -d "$file" ]]; then
     eza "${eza_arg[@]}" "$file" | head -$MAX_DIR_ITEMS
-    return
+    exit 0
 fi
 
 # detect file without extsion
@@ -154,6 +155,7 @@ file_type_assert() {
     fi
     return 1
 }
+# TODO: support '.bz2', '.xz', '.Z' and '.rar' for files without extension.
 get_file_ext() {
     local file="$1"
 
@@ -178,39 +180,39 @@ get_file_ext() {
 case "$(get_file_ext "$file")" in
     text)
         cat "$file"
-        return
+        exit 0
         ;;
   # svg)
   #     chafa --size=$view_size --animate=off "$file"
-  #     return
+  #     exit 0
   #     ;;
     image)
         chafa --size=$view_size --animate=off "$file"
-        return
+        exit 0
         ;;
     pdf)
         local img=$(thumb_cache "$file" "PDF" gen_pdf_thumb "$salt_default")
         img_preview_fix "$file" "$img" gen_pdf_thumb
-        return
+        exit 0
         ;;
     djvu)
         local img=$(thumb_cache "$file" "DJVU" gen_djvu_thumb "$salt_default")
         img_preview_fix "$file" "$img" gen_djvu_thumb
-        return
+        exit 0
         ;;
     epub|mobi)
         local img=$(thumb_cache "$file" "DJVU" gen_epmo_thumb "$salt_default")
         img_preview_fix "$file" "$img" gen_epmo_thumb
-        return
+        exit 0
         ;;
     binary)
         file "$file" | fmt -s
-        return
+        exit 0
         ;;
     font)
         local img=$(thumb_cache "$file" "FONT" gen_font_thumb "$font_text")
         img_preview_fix "$file" "$img" gen_font_thumb
-        return
+        exit 0
         ;;
     zip)
         if [[ ! -z "$(ls -A $mnt_point)" ]]; then
@@ -218,7 +220,7 @@ case "$(get_file_ext "$file")" in
         fi
         fuse-zip -r "$file" "$mnt_point"
         eza "${eza_arg[@]}" "$mnt_point" | head -$MAX_DIR_ITEMS
-        return
+        exit 0
         ;;
     gzip)
         if [[ ! -z "$(ls -A $mnt_point)" ]]; then
@@ -226,7 +228,7 @@ case "$(get_file_ext "$file")" in
         fi
         archivemount "$file" "$mnt_point" -o readonly,nosave
         eza "${eza_arg[@]}" "$mnt_point" | head -$MAX_DIR_ITEMS
-        return
+        exit 0
         ;;
     WITH_EXT)
         ;;
@@ -235,7 +237,7 @@ esac
 # file type by extension
 case "$ext" in
     # text files
-    *.txt|*.md|*.org|*.json|*.yaml|*.yml|*.log|*.c|*.cpp|*.h|*.py|*.sh|*.zsh|*.el|*.tex|*.sty|*.cls|*.dtx)
+    *.txt|*.md|*.org|*.json|*.yaml|*.yml|*.log|*.c|*.cc|*.cpp|*.h|*.hh|*.py|*.sh|*.zsh|*.el|*.tex|*.sty|*.cls|*.dtx)
         bat --style=numbers --color=always --line-range :$MAX_DIR_ITEMS "$file"
         ;;
 

@@ -3,14 +3,6 @@
 ![](./ipre_example.gif)
 
 # Dependency
-
-My terminal - `foot`, shell - `zsh`.
-
-1. `fd/fzf`   - the kernel
-2. `fmv`      - view image
-3. `fathura`  - view pdf
-4. `fvim`     - text editor
-
 The following programs are required by the `pre` command:
 
 1. `chafa`    - print image in terminal(the kernel)
@@ -22,6 +14,8 @@ The following programs are required by the `pre` command:
 7. `ffmpegthumbnailer`      - preview videos
 8. `archivemount/fuse-zip`  - preview tar(.gz) or zip files
 9. `gnome-epub-thumbnailer` - preview EPub or MOBI books
+
+To make `chafa` work, your terminal must support the `sixel` protocol, and your shell must be `Zsh`.
 
 
 # Usage
@@ -38,13 +32,13 @@ $ pre test.epub
 ```
 
 ## play with fzf
-Add the following script to your `~/.zshrc`:
+Add the following script to your `.zshrc`:
 
 ```shell
 function ipre() {
     local cmd file
-    if [[ -n "$IPRE_CMD" ]]; then
-        cmd=(${=IPRE_CMD})
+    if [[ -n "$IPRE_LS" ]]; then
+        cmd=(${=IPRE_LS})
     else
         cmd=(
             fd . --hidden --follow
@@ -111,12 +105,27 @@ function ipre() {
 }
 ```
 
-Some note:
+To use this function, install the following:
 
-* set `IPRE_CMD` to change the default search method;
+1. `fd/fzf`   - the kernel
+2. `imv`      - open image
+3. `zathura`  - open pdf
+4. `nvim`     - the text editor
+
+Using examples:
+
+```shell
+ipre                  # search current directory
+ipre <dir>            # search dir
+ipre <dir_1> ... <dir_n>  # search all of these directories together 
+```
+
+
+Notes:
+
+* set `IPRE_LS` to change the default search method;
 * set `EDITOR` to change the default text file opener command;
-* you may change `wl-copy`.
-* you can add key bindings to `fzf` using the `--bind` option.
+* you may need to replace `wl-copy` with your own clipboard program;
 
 
 # Config
@@ -128,5 +137,5 @@ Configure this program by environment variables.
 
 # WARNING
 
-* if pdf-preview does NOT working, clean the folder `~/.cache/pre_thumbs`.
+* if pdf-preview does NOT work, clean the folder `~/.cache/pre_thumbs`.
 * before clear the cache folder `~/.cache/pre_thumbs`, run `umount ~/.cache/pre_thumbs/mnt` first !!!
