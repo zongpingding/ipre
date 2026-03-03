@@ -81,7 +81,8 @@ function ipre() {
         "${cmd[@]}" | fzf \
         --preview 'pre {}' \
         --height=50% --reverse  \
-        --preview-window=right:60%
+        --preview-window=right:60% \
+        --bind 'ctrl-y:execute-silent(echo {} | wl-copy)'
         )
     # post action for selection:
     [[ -z "$file" ]] && return
@@ -114,6 +115,7 @@ Some note:
 
 * set `IPRE_CMD` to change the default search method;
 * set `EDITOR` to change the default text file opener command;
+* you may change `wl-copy`.
 * you can add key bindings to `fzf` using the `--bind` option.
 
 

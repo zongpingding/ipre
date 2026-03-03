@@ -3,7 +3,7 @@
 # WARNING:
 #   before clear the cache folder '~/.cache/pre_thumbs',
 #   run 'umount ~/.cache/pre_thumbs/mnt' first !!!
- 
+
 # Dependency:
 #   1. chafa    - print image in terminal(kernel)
 #   2. eza      - preview directory
@@ -142,14 +142,100 @@ if [[ -d "$file" ]]; then
     eza "${eza_arg[@]}" "$file" | head -$MAX_DIR_ITEMS
     return
 fi
-# match simple text file with NO ext
-if file -b --mime-encoding "$file" | grep -Eq '^(us-ascii|utf-8)$' \
-   && [[ "${file##*/}" != *.* ]]; then
-    cat "$file"
-fi
+
+# detect file without extsion
+file_type_assert() {
+    local file="$1"
+    local keyword="$2"
+    local ext="$3"
+    if file --mime-type -b "$file" 2>/dev/null | grep -qi "$keyword"; then
+        echo "$ext"
+        return 0
+    fi
+    return 1
+}
+get_file_ext() {
+    local file="$1"
+
+    # if file has extension:
+    if [[ ! "${file##*/}" != *.* ]]; then
+        echo "WITH_EXT"
+        return
+    fi
+    # for files without extension:
+    file_type_assert "$file" "pdf"        "pdf"    && return # pdf
+    file_type_assert "$file" "djvu"       "djvu"   && return # djvu
+    file_type_assert "$file" "epub"       "epub"   && return # epub
+    file_type_assert "$file" "mobi"       "mobi"   && return # mobi
+  # file_type_assert "$file" "svg"        "svg"    && return # svg
+    file_type_assert "$file" "image"      "image"  && return # normal image
+    file_type_assert "$file" "text"       "text"   && return # text file
+    file_type_assert "$file" "executable" "binary" && return # binary
+    file_type_assert "$file" "font"       "font"   && return # font
+    file_type_assert "$file" "gzip"       "gzip"   && return # (tar) gzip
+    file_type_assert "$file" "zip"        "zip"    && return # zip
+}
+case "$(get_file_ext "$file")" in
+    text)
+        cat "$file"
+        return
+        ;;
+  # svg)
+  #     chafa --size=$view_size --animate=off "$file"
+  #     return
+  #     ;;
+    image)
+        chafa --size=$view_size --animate=off "$file"
+        return
+        ;;
+    pdf)
+        local img=$(thumb_cache "$file" "PDF" gen_pdf_thumb "$salt_default")
+        img_preview_fix "$file" "$img" gen_pdf_thumb
+        return
+        ;;
+    djvu)
+        local img=$(thumb_cache "$file" "DJVU" gen_djvu_thumb "$salt_default")
+        img_preview_fix "$file" "$img" gen_djvu_thumb
+        return
+        ;;
+    epub|mobi)
+        local img=$(thumb_cache "$file" "DJVU" gen_epmo_thumb "$salt_default")
+        img_preview_fix "$file" "$img" gen_epmo_thumb
+        return
+        ;;
+    binary)
+        file "$file" | fmt -s
+        return
+        ;;
+    font)
+        local img=$(thumb_cache "$file" "FONT" gen_font_thumb "$font_text")
+        img_preview_fix "$file" "$img" gen_font_thumb
+        return
+        ;;
+    zip)
+        if [[ ! -z "$(ls -A $mnt_point)" ]]; then
+            umount $mnt_point
+        fi
+        fuse-zip -r "$file" "$mnt_point"
+        eza "${eza_arg[@]}" "$mnt_point" | head -$MAX_DIR_ITEMS
+        return
+        ;;
+    gzip)
+        if [[ ! -z "$(ls -A $mnt_point)" ]]; then
+            umount $mnt_point
+        fi
+        archivemount "$file" "$mnt_point" -o readonly,nosave
+        eza "${eza_arg[@]}" "$mnt_point" | head -$MAX_DIR_ITEMS
+        return
+        ;;
+    WITH_EXT)
+        ;;
+esac
+
+# file type by extension
 case "$ext" in
     # text files
-    *.txt|*.md|*.org|*.json|*.yaml|*.yml|*.log|*.c|*.cpp|*.h|*.py|*.sh|*.zsh|*.el|*.tex)
+    *.txt|*.md|*.org|*.json|*.yaml|*.yml|*.log|*.c|*.cpp|*.h|*.py|*.sh|*.zsh|*.el|*.tex|*.sty|*.cls|*.dtx)
         bat --style=numbers --color=always --line-range :$MAX_DIR_ITEMS "$file"
         ;;
 
