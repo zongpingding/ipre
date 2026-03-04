@@ -119,11 +119,11 @@ img_preview_fix() {
     # echo "$img" | wl-copy
     for ((i=1; i<=$MAX_FIX; i++)); do
         if [[ -f "$img" ]]; then
+            # NOTE:this test will print image !!!
             if ! chafa --size=$view_size --animate=off "$img"; then
                 rm -f "$img"
                 "$gen_cmd" "$file" "$img"
             else
-                chafa --size=$view_size --animate=off "$img"
                 success=1
                 break
             fi
