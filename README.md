@@ -34,7 +34,7 @@ $ pre test.epub
 ## play with fzf
 Add the following script to your `.zshrc`:
 
-```shell
+```bash
 function ipre() {
     local cmd file
     if [[ -n "$IPRE_LS" ]]; then
@@ -65,6 +65,7 @@ function ipre() {
             -E .emacs-tmp
             -E .pub-cache
             -E .proxyman
+            . # search all patterns
             )
     fi
     if [[ $# -gt 0 ]]; then
@@ -72,6 +73,7 @@ function ipre() {
     fi
     # file select and preview
     cmd_str=$(printf '%q ' "${cmd[@]}")
+    # merge with fzf
     FZF_STATE_FILE="$HOME/.cache/pre_thumbs/fzf_state"
     echo "file" > "$FZF_STATE_FILE"
     file=$(
@@ -92,25 +94,25 @@ function ipre() {
                    $cmd_str --type d $dir; \
                else \
                    echo 'file' > '$FZF_STATE_FILE' && \
-                   $cmd_str . $dir; \
+                   $cmd_str $dir; \
                fi)" \
         --bind 'alt-a:select-all' \
         --bind 'alt-a:+execute-silent(echo {+} | wl-copy)' \
         --bind 'alt-y:execute-silent(echo {} | wl-copy)' \
         --bind "alt-r:execute-silent(rm -f {})+reload($cmd_str)" \
-        --bind "alt-left:reload($cmd_str . $dir)" \
+        --bind "alt-left:reload($cmd_str $dir)" \
         --bind "alt-right:reload(\
                if [[ -d '{}' ]]; then \
-                  $cmd_str . {}; \
+                  $cmd_str {}; \
                else \
-                  $cmd_str . \$(dirname {}); \
+                  $cmd_str \$(dirname {}); \
                fi)"
         )
     # post action for selection:
     [[ -z "$file" ]] && return
     if [[ -d "$file" ]]; then
         cd "$file"
-        return
+        exit 0
     fi
     case "${file:l}" in
         *.png|*.jpg|*.jpeg|*.gif|*.webp|*.bmp|*.tiff)
@@ -132,6 +134,7 @@ function ipre() {
     esac
 }
 ```
+
 
 To use this function, install the following:
 
