@@ -112,7 +112,7 @@ function ipre() {
     [[ -z "$file" ]] && return
     if [[ -d "$file" ]]; then
         cd "$file"
-        exit 0
+        return
     fi
     case "${file:l}" in
         *.png|*.jpg|*.jpeg|*.gif|*.webp|*.bmp|*.tiff)
