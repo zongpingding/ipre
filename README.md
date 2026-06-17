@@ -24,7 +24,10 @@ Add this script to your `PATH`.
 ## basic
 Provide a filename as an argument like this:
 ```shell
+# view page 1 in test.pdf
 $ pre test.pdf
+# view page 4 in test.pdf
+$ pre test.pdf 4
 $ pre test.mp4
 $ pre test.png
 $ pre times.ttf
@@ -34,107 +37,10 @@ $ pre test.epub
 ## play with fzf
 Add the following script to your `.zshrc`:
 
-```bash
-function ipre() {
-    local cmd file
-    if [[ -n "$IPRE_LS" ]]; then
-        cmd=(${=IPRE_LS})
-    else
-        cmd=(
-            fd --hidden --follow
-            -E .git
-            -E target
-            -E .cargo
-            -E build
-            -E .npm
-            -E node_modules
-            -E .cache
-            -E dist
-            -E out
-            -E lsp-bridge
-            # other ignore dir
-            -E .java
-            -E .gradle
-            -E .nuget
-            -E .steam
-            -E .android
-            -E .ipython
-            -E .vscode
-            -E .vscode-oss
-            -E .oh-my-zsh
-            -E .emacs-tmp
-            -E .pub-cache
-            -E .proxyman
-            . # search all patterns
-            )
-    fi
-    if [[ $# -gt 0 ]]; then
-        cmd+=("$@")
-    fi
-    # file select and preview
-    cmd_str=$(printf '%q ' "${cmd[@]}")
-    # merge with fzf
-    FZF_STATE_FILE="$HOME/.cache/pre_thumbs/fzf_state"
-    echo "file" > "$FZF_STATE_FILE"
-    file=$(
-        "${cmd[@]}" | fzf \
-        --multi \
-        --prompt "ipre > " \
-        --preview 'pre {}' \
-        --height=50% --reverse \
-        --preview-window=right:60% \
-        --bind 'resize:refresh-preview' \
-        --bind 'focus,load:transform-header:file --brief {}' \
-        --bind "\`:reload(\
-               if grep -qxF 'file' '$FZF_STATE_FILE'; then \
-                   echo 'directory' > '$FZF_STATE_FILE' && \
-                   $cmd_str --type f $dir; \
-               elif grep -qxF 'directory' '$FZF_STATE_FILE'; then \
-                   echo 'all' > '$FZF_STATE_FILE' && \
-                   $cmd_str --type d $dir; \
-               else \
-                   echo 'file' > '$FZF_STATE_FILE' && \
-                   $cmd_str $dir; \
-               fi)" \
-        --bind 'alt-a:select-all' \
-        --bind 'alt-a:+execute-silent(echo {+} | wl-copy)' \
-        --bind 'alt-y:execute-silent(echo {} | wl-copy)' \
-        --bind "alt-r:execute-silent(rm -f {})+reload($cmd_str)" \
-        --bind "alt-left:reload($cmd_str $dir)" \
-        --bind "alt-right:reload(\
-               if [[ -d '{}' ]]; then \
-                  $cmd_str {}; \
-               else \
-                  $cmd_str \$(dirname {}); \
-               fi)"
-        )
-    # post action for selection:
-    [[ -z "$file" ]] && return
-    if [[ -d "$file" ]]; then
-        cd "$file"
-        return
-    fi
-    case "${file:l}" in
-        *.png|*.jpg|*.jpeg|*.gif|*.webp|*.bmp|*.tiff)
-            nohup imv "$file" &>/dev/null &
-            ;;
-        *.pdf|*.djvu|*.epub|*.mobi)
-            nohup zathura "$file" &>/dev/null &
-            ;;
-        *.tar|*.tar.gz|*.tgz|*.tar.xz|*.txz|*.tar.bz2|*.tbz2)
-            return
-            ;;
-        *.zip)
-            return
-            ;;
-        # for text files to open:
-        *)
-            ${EDITOR:-nvim} "$file"
-            ;;
-    esac
-}
+```shell
+# change the path
+source /path/to/ipre.zsh
 ```
-
 
 To use this function, install the following:
 
@@ -146,11 +52,10 @@ To use this function, install the following:
 Using examples:
 
 ```shell
-ipre                  # search current directory
-ipre <dir>            # search dir
+ipre                      # search current directory
+ipre <dir>                # search dir
 ipre <dir_1> ... <dir_n>  # search all of these directories together 
 ```
-
 
 Notes:
 

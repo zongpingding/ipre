@@ -15,112 +15,94 @@
 #   8. archivemount/fuse-zip  - preview tar(.gz) or zip files
 #   9. gnome-epub-thumbnailer - preview EPub or MOBI books
 
-
 local file="$1"
-local ext="${file:l}"
-local view_size="x17" # 'WxH' -> set width automatically
+local target_page="$2"
+
+# Validate if target_page is a positive integer, otherwise default to 1
+if [[ -z "$target_page" ]] || ! [[ "$target_page" =~ ^[0-9]+$ ]]; then
+    target_page=1
+fi
+
+local ext="${file:l:e}" # Extract lowercase extension
+if [[ -n "$FZF_PREVIEW_COLUMNS" && -n "$FZF_PREVIEW_LINES" ]]; then
+    local view_size="${FZF_PREVIEW_COLUMNS}x${FZF_PREVIEW_LINES}"
+else
+    local view_size="x17"
+fi
 local cache_dir="$HOME/.cache/pre_thumbs"
 local mnt_point="$HOME/.cache/pre_thumbs/mnt"
-# local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/pre_thumbs"
 local MAX_DIR_ITEMS=200
 local MAX_FIX=3
+
 # eza argument
-# usage: export EZA_ARG="-T --icons"
 if [[ -n "$EZA_ARG" ]]; then
     local eza_arg=(${=EZA_ARG})
 else
     local eza_arg=(-Tlb --icons=always --color=always)
 fi
-# font preview text
-# usage: export FONT_TEXT="Hello, world."
-if [[ -n "$FONT_TEXT" ]]; then
-    local font_text="$FONT_TEXT"
-else
-    local font_text="ABCDEFGH\n0123456789\nabcdefgh"
-fi
 
+# font preview text
+local font_text="${FONT_TEXT:-"ABCDEFGH\n0123456789\nabcdefgh"}"
 
 # make cache dir
 mkdir -p "$cache_dir"
 mkdir -p "$mnt_point"
 
-
-# thumb image cache
-if [[ -f "$cache_dir/default_salt" ]]; then
-    local salt_default="$(cat $cache_dir/default_salt)"
+# thumb image cache salt
+local salt_file="$cache_dir/default_salt"
+if [[ -f "$salt_file" ]]; then
+    local salt_default="$(cat "$salt_file")"
 else
-    echo "$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)" \
-         > "$cache_dir/default_salt"
+    local salt_default="$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)"
+    echo "$salt_default" > "$salt_file"
 fi
+
+# Helper Functions
+cleanup_mount() {
+    # Check if mount point is not empty before unmounting
+    if [[ -n "$(ls -A "$mnt_point" 2>/dev/null)" ]]; then
+        umount "$mnt_point" 2>/dev/null || fusermount -u "$mnt_point" 2>/dev/null
+    fi
+}
 thumb_cache() {
     local file="$1"
     local prefix="$2"
     local gen_cmd="$3"
-    local hash_salt="$4" # add salt to HASH
+    local hash_salt="$4"
 
-    # cache label
-    local mtime key
+    local mtime key img
     mtime=$(stat -c %Y "$file" 2>/dev/null) || return 1
     key=$(printf "%s_%s_%s" "$file" "$mtime" "$hash_salt" | md5sum | awk '{print $1}')
-
-    # if not-cached, generate it
-    local img="$cache_dir/${prefix}_${key}.png"
+    
+    img="$cache_dir/${prefix}_${key}.png"
     if [[ ! -f "$img" ]]; then
         "$gen_cmd" "$file" "$img"
     fi
     echo "$img"
 }
 
-# thumb image generate
-gen_video_thumb() {
-    local file="$1"
-    local img="$2"
-    ffmpegthumbnailer -s 0 -i "$file" -o "$img" &>/dev/null
-}
-
-gen_pdf_thumb() {
-    local file="$1"
-    local img="$2"
-    # use '-singlefile' to remove the number suffix
-    pdftoppm -f 1 -singlefile -png -rx 100 -ry 100 \
-             "$file" "${img%.png}" >/dev/null 2>&1
-}
-
-gen_djvu_thumb() {
-    local file="$1"
-    local img="$2"
-    ddjvu -format=tiff -page=1 "$file" "$img" >/dev/null 2>&1
-}
-
-gen_epmo_thumb() { # Epub & MOBI
-    local file="$1"
-    local img="$2"
-    gnome-epub-thumbnailer "$file" "$img" >/dev/null 2>&1
-}
-
-gen_font_thumb() {
-    local file="$1"
-    local img="$2"
+# Image generators...
+gen_video_thumb() { ffmpegthumbnailer -s 0 -i "$1" -o "$2" &>/dev/null; }
+gen_pdf_thumb()   { pdftoppm -f "$target_page" -singlefile -png -rx 100 -ry 100 "$1" "${2%.png}" >/dev/null 2>&1; }
+gen_djvu_thumb()  { ddjvu -format=tiff -page="$target_page" "$1" "$2" >/dev/null 2>&1; }
+gen_epmo_thumb()  { gnome-epub-thumbnailer "$1" "$2" >/dev/null 2>&1; }
+gen_font_thumb()  { 
     magick -gravity center -size 400x400 \
            -background "#ffffff" -fill "#000000" \
-           -font "$file" caption:"$font_text" \
-           "$img"
+           -font "$1" caption:"$font_text" "$2"
 }
 
-
-# auto re-generate(fix) for damaged picture
+# Auto re-generate(fix) and print image
 img_preview_fix() {
     local file="$1"
     local img="$2"
     local gen_cmd="$3"
     local success=0
 
-    # auto fix damaged picture 'MAX_FIX' times
-    # echo "$img" | wl-copy
     for ((i=1; i<=$MAX_FIX; i++)); do
         if [[ -f "$img" ]]; then
-            # NOTE:this test will print image !!!
-            if ! chafa --size=$view_size --animate=off "$img"; then
+            # NOTE: this command tests the image AND prints it
+            if ! chafa --format=sixel --size=$view_size --animate=off "$img"; then
                 rm -f "$img"
                 "$gen_cmd" "$file" "$img"
             else
@@ -131,165 +113,120 @@ img_preview_fix() {
             "$gen_cmd" "$file" "$img"
         fi
     done
+
     if [[ "$success" -eq 0 ]]; then
-        printf "\n\nERROR: Failed to generate preview image !"
+        printf "\n\nERROR: Failed to generate preview image !\n"
         exit 1
     fi
 }
 
+file_type_assert() {
+    local file="$1"
+    local keyword="$2"
+    local mapped_type="$3"
+    if file --mime-type -b "$file" 2>/dev/null | grep -qi "$keyword"; then
+        echo "$mapped_type"
+        return 0
+    fi
+    return 1
+}
 
-# check if 'file' is a directory
+# Unified File Type Router
+get_file_type() {
+    local file="$1"
+    local ext="$2"
+
+    # 1. Fast path: Match by extension
+    case "$ext" in
+        txt|md|org|json|yaml|yml|log|hs|r|c|cc|cpp|h|hh|py|sh|zsh|el|tex|sty|cls|dtx) echo "text" ; return ;;
+        png|jpg|jpeg|svg|gif|webp|bmp|tiff) echo "image" ; return ;;
+        pdf) echo "pdf" ; return ;;
+        djvu) echo "djvu" ; return ;;
+        epub|mobi) echo "epmo" ; return ;;
+        ttf|otf|ttc|otc|woff|woff2) echo "font" ; return ;;
+        mp4|mkv|mov|mpv|avi|wmv|flv|webm|ts|m2ts|vob|3gp) echo "video" ; return ;;
+        tar|gz|tgz|xz|txz|bz2|tbz2) echo "archive" ; return ;;
+        zip) echo "zip" ; return ;;
+    esac
+
+    # 2. Slow path: If extension is missing or unknown, probe MIME type
+    file_type_assert "$file" "pdf"        "pdf"      && return
+    file_type_assert "$file" "djvu"       "djvu"     && return
+    file_type_assert "$file" "epub"       "epmo"     && return
+    file_type_assert "$file" "mobi"       "epmo"     && return
+    file_type_assert "$file" "image"      "image"    && return
+    file_type_assert "$file" "text"       "text"     && return
+    file_type_assert "$file" "executable" "binary"   && return
+    file_type_assert "$file" "font"       "font"     && return
+    file_type_assert "$file" "gzip"       "archive"  && return
+    file_type_assert "$file" "zip"        "zip"      && return
+
+    echo "unknown"
+}
+
+# ==========================================
+# Main Execution
+# ==========================================
+
+# 1. Handle directories directly
 if [[ -d "$file" ]]; then
     eza "${eza_arg[@]}" "$file" | head -$MAX_DIR_ITEMS
     exit 0
 fi
 
-# detect file without extsion
-file_type_assert() {
-    local file="$1"
-    local keyword="$2"
-    local ext="$3"
-    if file --mime-type -b "$file" 2>/dev/null | grep -qi "$keyword"; then
-        echo "$ext"
-        return 0
-    fi
-    return 1
-}
-# TODO: support '.bz2', '.xz', '.Z' and '.rar' for files without extension.
-get_file_ext() {
-    local file="$1"
+# 2. Determine generalized file type
+file_type=$(get_file_type "$file" "$ext")
 
-    # if file has extension:
-    if [[ ! "${file##*/}" != *.* ]]; then
-        echo "WITH_EXT"
-        return
-    fi
-    # for files without extension:
-    file_type_assert "$file" "pdf"        "pdf"    && return # pdf
-    file_type_assert "$file" "djvu"       "djvu"   && return # djvu
-    file_type_assert "$file" "epub"       "epub"   && return # epub
-    file_type_assert "$file" "mobi"       "mobi"   && return # mobi
-  # file_type_assert "$file" "svg"        "svg"    && return # svg
-    file_type_assert "$file" "image"      "image"  && return # normal image
-    file_type_assert "$file" "text"       "text"   && return # text file
-    file_type_assert "$file" "executable" "binary" && return # binary
-    file_type_assert "$file" "font"       "font"   && return # font
-    file_type_assert "$file" "gzip"       "gzip"   && return # (tar) gzip
-    file_type_assert "$file" "zip"        "zip"    && return # zip
-}
-case "$(get_file_ext "$file")" in
+# 3. Route to specific viewer
+case "$file_type" in
     text)
-        cat "$file"
-        exit 0
+        # Use bat if available, otherwise fallback to cat
+        if command -v bat &> /dev/null; then
+            bat --style=numbers --color=always --line-range :$MAX_DIR_ITEMS "$file"
+        else
+            head -n "$MAX_DIR_ITEMS" "$file"
+        fi
         ;;
-  # svg)
-  #     chafa --size=$view_size --animate=off "$file"
-  #     exit 0
-  #     ;;
     image)
-        chafa --size=$view_size --animate=off "$file"
-        exit 0
+        # chafa --size=$view_size --animate=off "$file"
+	chafa --format=sixel --size=$view_size --animate=off --clear "$file"
         ;;
     pdf)
-        local img=$(thumb_cache "$file" "PDF" gen_pdf_thumb "$salt_default")
+        img=$(thumb_cache "$file" "PDF_P${target_page}" gen_pdf_thumb "$salt_default")
         img_preview_fix "$file" "$img" gen_pdf_thumb
-        exit 0
         ;;
     djvu)
-        local img=$(thumb_cache "$file" "DJVU" gen_djvu_thumb "$salt_default")
+        img=$(thumb_cache "$file" "DJVU_P${target_page}" gen_djvu_thumb "$salt_default")
         img_preview_fix "$file" "$img" gen_djvu_thumb
-        exit 0
         ;;
-    epub|mobi)
-        local img=$(thumb_cache "$file" "DJVU" gen_epmo_thumb "$salt_default")
+    epmo)
+        img=$(thumb_cache "$file" "EPMO" gen_epmo_thumb "$salt_default")
         img_preview_fix "$file" "$img" gen_epmo_thumb
-        exit 0
+        ;;
+    font)
+        img=$(thumb_cache "$file" "FONT" gen_font_thumb "$font_text")
+        img_preview_fix "$file" "$img" gen_font_thumb
+        ;;
+    video)
+        img=$(thumb_cache "$file" "VIDEO" gen_video_thumb "$salt_default")
+        img_preview_fix "$file" "$img" gen_video_thumb
+        ;;
+    zip)
+        cleanup_mount
+        fuse-zip -r "$file" "$mnt_point"
+        eza "${eza_arg[@]}" "$mnt_point" | head -$MAX_DIR_ITEMS
+        ;;
+    archive)
+        cleanup_mount
+        archivemount "$file" "$mnt_point" -o readonly,nosave
+        eza "${eza_arg[@]}" "$mnt_point" | head -$MAX_DIR_ITEMS
         ;;
     binary)
         file "$file" | fmt -s
-        exit 0
         ;;
-    font)
-        local img=$(thumb_cache "$file" "FONT" gen_font_thumb "$font_text")
-        img_preview_fix "$file" "$img" gen_font_thumb
-        exit 0
-        ;;
-    zip)
-        if [[ ! -z "$(ls -A $mnt_point)" ]]; then
-            umount $mnt_point
-        fi
-        fuse-zip -r "$file" "$mnt_point"
-        eza "${eza_arg[@]}" "$mnt_point" | head -$MAX_DIR_ITEMS
-        exit 0
-        ;;
-    gzip)
-        if [[ ! -z "$(ls -A $mnt_point)" ]]; then
-            umount $mnt_point
-        fi
-        archivemount "$file" "$mnt_point" -o readonly,nosave
-        eza "${eza_arg[@]}" "$mnt_point" | head -$MAX_DIR_ITEMS
-        exit 0
-        ;;
-    WITH_EXT)
-        ;;
-esac
-
-# file type by extension
-case "$ext" in
-    # text files
-    *.txt|*.md|*.org|*.json|*.yaml|*.yml|*.log|*.c|*.cc|*.cpp|*.h|*.hh|*.py|*.sh|*.zsh|*.el|*.tex|*.sty|*.cls|*.dtx)
-        bat --style=numbers --color=always --line-range :$MAX_DIR_ITEMS "$file"
-        ;;
-
-    # image
-    *.png|*.jpg|*.jpeg|*.svg|*.gif|*.webp|*.bmp|*.tiff)
-        chafa --size=$view_size --animate=off "$file"
-        ;;
-
-    # document
-    *.pdf)
-        local img=$(thumb_cache "$file" "PDF" gen_pdf_thumb "$salt_default")
-        img_preview_fix "$file" "$img" gen_pdf_thumb
-        ;;
-    *.djvu)
-        local img=$(thumb_cache "$file" "DJVU" gen_djvu_thumb "$salt_default")
-        img_preview_fix "$file" "$img" gen_djvu_thumb
-        ;;
-    *.epub|*.mobi)
-        local img=$(thumb_cache "$file" "DJVU" gen_epmo_thumb "$salt_default")
-        img_preview_fix "$file" "$img" gen_epmo_thumb
-        ;;
-
-    # font
-    *.ttf|*.otf|*.ttc|*.otc|*.woff|*.woff2)
-        local img=$(thumb_cache "$file" "FONT" gen_font_thumb "$font_text")
-        img_preview_fix "$file" "$img" gen_font_thumb
-        ;;
-
-    # video
-    *.mp4|*.mkv|*.mov|*.mpv|*.avi|*.wmv|*.flv|*.webm|*.ts|*.m2ts|*.vob|*.3gp)
-        local img=$(thumb_cache "$file" "VIDEO" gen_video_thumb "$salt_default")
-        img_preview_fix "$file" "$img" gen_vedio_thumb
-        ;;
-
-    # tar(.gz) & zip
-    *.tar|*.tar.gz|*.tgz|*.tar.xz|*.txz|*.tar.bz2|*.tbz2)
-        if [[ ! -z "$(ls -A $mnt_point)" ]]; then
-            umount $mnt_point
-        fi
-        archivemount "$file" "$mnt_point" -o readonly,nosave
-        eza "${eza_arg[@]}" "$mnt_point" | head -$MAX_DIR_ITEMS
-        ;;
-    *.zip)
-        if [[ ! -z "$(ls -A $mnt_point)" ]]; then
-            umount $mnt_point
-        fi
-        fuse-zip -r "$file" "$mnt_point"
-        eza "${eza_arg[@]}" "$mnt_point" | head -$MAX_DIR_ITEMS
-        ;;
-
-    # others
-    *)
+    unknown|*)
         file "$file" | fmt -s
         ;;
 esac
+
+exit 0
