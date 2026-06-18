@@ -72,7 +72,7 @@ case "\$ACTION" in
         cd "\$(cat '$FZF_CWD_FILE')" || exit 1
         run_cmd="$cmd_str"
         targets="\$(cat '$FZF_TARGETS_FILE')"
-        
+
         if [ "\$(cat '$FZF_HIDDEN_FILE')" = "true" ]; then
             run_cmd="\$run_cmd --hidden"
         fi
@@ -169,7 +169,7 @@ EOF
         --bind 'alt-a:select-all' \
         --bind "alt-a:+execute-silent(cd \"\$(cat '$FZF_CWD_FILE')\" && realpath {+} | wl-copy)" \
         --bind "alt-y:execute-silent(cd \"\$(cat '$FZF_CWD_FILE')\" && realpath {} | wl-copy && notify-send {})" \
-	--bind "alt-r:execute-silent(cd \"\$(cat '$FZF_CWD_FILE')\" && rm -rf {})+reload(\"$FZF_ACTION_CMD\" run)" \
+        --bind "alt-r:execute-silent(cd \"\$(cat '$FZF_CWD_FILE')\" && rm -rf {})+reload(\"$FZF_ACTION_CMD\" run)" \
         --bind "left:reload(\"$FZF_ACTION_CMD\" left)+clear-query" \
         --bind "right:reload(\"$FZF_ACTION_CMD\" right {})+clear-query"
     )}")
