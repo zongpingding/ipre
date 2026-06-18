@@ -63,7 +63,22 @@ Using examples:
 ipre                      # search current directory
 ipre <dir>                # search dir
 ipre <dir_1> ... <dir_n>  # search all of these directories together 
+
+# add more filter to fd
+ipre <dir> -e c           # select files with extension '.c'
+ipre <dir> --maxdepth 1   # perform likes yazi
 ```
+
+Keybinds:
+
+1. `alt-p`: toggle preview window
+2. `alt-.`: toggle hidden files entries
+3. `alt-a`: copy all entries to clipboard
+4. `alt-y`: copy current entry to clipboard
+5. `alt-r`: delete entry files(directories) (**THIS IS DANGEROUS**)
+6. `left`: goto upper directory
+7. `right`: goto entry point directory
+8. `Tab`: toggle entry selection
 
 Notes:
 

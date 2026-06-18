@@ -1,6 +1,6 @@
 # Inline (file) preview in zshell
 
-# NOTE: 
+# NOTE:
 #  1. maybe we can replace chafa by imgcat, which is faster.
 #  2. 'transform-prompt' does NOT evaluate danymiclly.
 #  2. maybe we can use 'skim' - just like fzf but in Rust.
@@ -67,12 +67,12 @@ case "\$ACTION" in
             eval "\$run_cmd --type f"
         fi
         ;;
-        
+
     header)
         state="\$(cat '$FZF_STATE_FILE')"
         cwd="\$(sed 's|^$HOME|~|' '$FZF_CWD_FILE')"
         cd "\$(cat '$FZF_CWD_FILE')" || exit 0
-        
+
         # Safely quote "\$ITEM" to prevent syntax errors with spaces
         if [ -n "\$ITEM" ] && [ -f "\$ITEM" ]; then
             info="\$(printf '[\033[1;33m%s\033[0m]: %s' "\$(du -sh "\$ITEM" 2>/dev/null | cut -f1)" "\$(file --brief "\$ITEM" 2>/dev/null)")"
@@ -83,7 +83,7 @@ case "\$ACTION" in
         fi
         printf '[\033[1;36m%s: %s\033[0m]\n%s' "\$state" "\$cwd" "\$info"
         ;;
-        
+
     switch)
         if grep -qxF 'file' '$FZF_STATE_FILE'; then
             echo 'directory' > '$FZF_STATE_FILE'
@@ -94,7 +94,7 @@ case "\$ACTION" in
         fi
         "\$0" run # trigger list generation
         ;;
-        
+
     hidden)
         if [ "\$(cat '$FZF_HIDDEN_FILE')" = "true" ]; then
             echo 'false' > '$FZF_HIDDEN_FILE'
@@ -102,7 +102,7 @@ case "\$ACTION" in
             echo 'true' > '$FZF_HIDDEN_FILE'
         fi
         ;;
-        
+
     right)
         cur="\$(cat '$FZF_CWD_FILE')"
         cd "\$cur" || exit 1
@@ -117,7 +117,7 @@ case "\$ACTION" in
         echo 'all' > '$FZF_STATE_FILE'
         "\$0" run
         ;;
-        
+
     left)
         cur="\$(cat '$FZF_CWD_FILE')"
         new="\$(realpath "\$cur/..")"
