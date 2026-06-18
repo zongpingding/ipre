@@ -1,11 +1,11 @@
 # Inline (file) preview in zshell
 
 # NOTE:
-#  1. maybe we can replace chafa by imgcat, which is faster.
+#  1. maybe we can replace chafa with imgcat, which is faster.
 #  2. 'transform-prompt' does NOT evaluate danymiclly.
-#  2. maybe we can use 'skim' - just like fzf but in Rust.
+#  3. maybe we can use 'skim' - just like fzf but in Rust.
 function ipre() {
-    local cmd cmd_str FZF_STATE_FILE FZF_CWD_FILE FZF_HIDDEN_FILE FZF_ACTION_CMD
+    local cmd cmd_str FZF_STATE_FILE FZF_CWD_FILE FZF_HIDDEN_FILE FZF_ACTION_CMD FZF_TARGETS_FILE
     if [[ -n "$IPRE_FD" ]]; then
         cmd=(${=IPRE_FD})
     else
@@ -19,12 +19,13 @@ function ipre() {
             . # search all patterns
         )
     fi
-    # Separate directory argument from fd command flags
+
+    # Parse arguments
     local start_dir="$PWD"
-    local -a extra_args
+    local -a extra_args target_dirs
     for arg in "$@"; do
         if [[ -d "$arg" ]]; then
-            start_dir="$(realpath "$arg")"
+            target_dirs+=("$(realpath "$arg")")
         else
             extra_args+=("$arg")
         fi
@@ -33,12 +34,26 @@ function ipre() {
         cmd+=("${extra_args[@]}")
     fi
     cmd_str=$(printf '%q ' "${cmd[@]}")
+    echo $cmd_str | wl-copy
+
     # Initialize State
     mkdir -p "$HOME/.cache/pre_thumbs"
     FZF_STATE_FILE="$HOME/.cache/pre_thumbs/fzf_state"
     FZF_CWD_FILE="$HOME/.cache/pre_thumbs/fzf_cwd"
     FZF_HIDDEN_FILE="$HOME/.cache/pre_thumbs/fzf_hidden"
+    FZF_TARGETS_FILE="$HOME/.cache/pre_thumbs/fzf_targets"
     FZF_ACTION_CMD="$HOME/.cache/pre_thumbs/fzf_action.sh"
+
+    if [[ ${#target_dirs[@]} -eq 1 ]]; then
+        start_dir="${target_dirs[1]}"
+        printf "" > "$FZF_TARGETS_FILE"
+    elif [[ ${#target_dirs[@]} -gt 1 ]]; then
+        start_dir="$PWD"
+        printf "%q " "${target_dirs[@]}" > "$FZF_TARGETS_FILE"
+    else
+        printf "" > "$FZF_TARGETS_FILE"
+    fi
+
     echo "all" > "$FZF_STATE_FILE"
     echo "$start_dir" > "$FZF_CWD_FILE"
     echo "true" > "$FZF_HIDDEN_FILE" # default: show hidden files
@@ -56,24 +71,30 @@ case "\$ACTION" in
     run)
         cd "\$(cat '$FZF_CWD_FILE')" || exit 1
         run_cmd="$cmd_str"
+        targets="\$(cat '$FZF_TARGETS_FILE')"
+        
         if [ "\$(cat '$FZF_HIDDEN_FILE')" = "true" ]; then
             run_cmd="\$run_cmd --hidden"
         fi
         if grep -qxF "directory" '$FZF_STATE_FILE'; then
-            eval "\$run_cmd --type d"
+            eval "\$run_cmd --type d \$targets"
         elif grep -qxF "all" '$FZF_STATE_FILE'; then
-            eval "\$run_cmd"
+            eval "\$run_cmd \$targets"
         else
-            eval "\$run_cmd --type f"
+            eval "\$run_cmd --type f \$targets"
         fi
         ;;
 
     header)
         state="\$(cat '$FZF_STATE_FILE')"
-        cwd="\$(sed 's|^$HOME|~|' '$FZF_CWD_FILE')"
+        targets="\$(cat '$FZF_TARGETS_FILE')"
+        if [ -n "\$targets" ]; then
+            cwd="[Multiple Directories]"
+        else
+            cwd="\$(sed 's|^$HOME|~|' '$FZF_CWD_FILE')"
+        fi
         cd "\$(cat '$FZF_CWD_FILE')" || exit 0
 
-        # Safely quote "\$ITEM" to prevent syntax errors with spaces
         if [ -n "\$ITEM" ] && [ -f "\$ITEM" ]; then
             info="\$(printf '[\033[1;33m%s\033[0m]: %s' "\$(du -sh "\$ITEM" 2>/dev/null | cut -f1)" "\$(file --brief "\$ITEM" 2>/dev/null)")"
         elif [ -n "\$ITEM" ]; then
@@ -92,7 +113,7 @@ case "\$ACTION" in
         else
             echo 'file' > '$FZF_STATE_FILE'
         fi
-        "\$0" run # trigger list generation
+        "\$0" run
         ;;
 
     hidden)
@@ -115,6 +136,7 @@ case "\$ACTION" in
             echo "\$new" > '$FZF_CWD_FILE'
         fi
         echo 'all' > '$FZF_STATE_FILE'
+        printf "" > '$FZF_TARGETS_FILE'
         "\$0" run
         ;;
 
@@ -123,6 +145,7 @@ case "\$ACTION" in
         new="\$(realpath "\$cur/..")"
         echo "\$new" > '$FZF_CWD_FILE'
         echo 'all' > '$FZF_STATE_FILE'
+        printf "" > '$FZF_TARGETS_FILE'
         "\$0" run
         ;;
 esac
@@ -145,8 +168,8 @@ EOF
         --bind 'alt-p:toggle-preview' \
         --bind 'alt-a:select-all' \
         --bind "alt-a:+execute-silent(cd \"\$(cat '$FZF_CWD_FILE')\" && realpath {+} | wl-copy)" \
-        --bind "alt-y:execute-silent(cd \"\$(cat '$FZF_CWD_FILE')\" && realpath {} | wl-copy)" \
-        --bind "alt-r:execute-silent(cd \"\$(cat '$FZF_CWD_FILE')\" && rm -rf {}) + reload(\"$FZF_ACTION_CMD\" run)" \
+        --bind "alt-y:execute-silent(cd \"\$(cat '$FZF_CWD_FILE')\" && realpath {} | wl-copy && notify-send {})" \
+	--bind "alt-r:execute-silent(cd \"\$(cat '$FZF_CWD_FILE')\" && rm -rf {})+reload(\"$FZF_ACTION_CMD\" run)" \
         --bind "left:reload(\"$FZF_ACTION_CMD\" left)+clear-query" \
         --bind "right:reload(\"$FZF_ACTION_CMD\" right {})+clear-query"
     )}")
@@ -158,7 +181,11 @@ EOF
     local final_cwd="$(cat "$FZF_CWD_FILE")"
     local -a abs_items
     for item in "${selected_items[@]}"; do
-        abs_items+=("$final_cwd/$item")
+        if [[ "$item" == /* ]]; then
+            abs_items+=("$item")
+        else
+            abs_items+=("$final_cwd/$item")
+        fi
     done
     local first_file="${abs_items[1]}"
     if [[ ${#abs_items[@]} -eq 1 && -d "$first_file" ]]; then
