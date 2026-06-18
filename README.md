@@ -1,8 +1,8 @@
-# Example
+## Example
 
 ![](./ipre_example.gif)
 
-# Dependency
+## Dependency
 The following programs are required by the `pre` command:
 
 1. `chafa`    - print image in terminal(the kernel)
@@ -18,7 +18,7 @@ The following programs are required by the `pre` command:
 To make `chafa` work, your terminal must support the `sixel` protocol, and your shell must be `Zsh`.
 
 
-# Usage
+## Usage
 Add this script to your `PATH`.
 
 ## basic
@@ -26,13 +26,21 @@ Provide a filename as an argument like this:
 ```shell
 # view page 1 in test.pdf
 $ pre test.pdf
-# view page 4 in test.pdf
+# view page 4 in test.pdf/test.djvu
 $ pre test.pdf 4
+$ pre test.djvu 4
+
 $ pre test.mp4
 $ pre test.png
 $ pre times.ttf
 $ pre test.epub
 ```
+
+## Config
+Configure this program by environment variables. 
+
+* set `EZA_ARG` to change the default argument of `eza`;
+* set `FONT_TEXT` to change the sample text in font-preview.
 
 ## play with fzf
 Add the following script to your `.zshrc`:
@@ -59,19 +67,11 @@ ipre <dir_1> ... <dir_n>  # search all of these directories together
 
 Notes:
 
-* set `IPRE_LS` to change the default search method;
+* set `IPRE_FD` to change the default search method;
 * set `EDITOR` to change the default text file opener command;
 * you may need to replace `wl-copy` with your own clipboard program;
 
-
-# Config
-Configure this program by environment variables. 
-
-* set `EZA_ARG` to change the default argument of `eza`;
-* set `FONT_TEXT` to change the sample text in font-preview.
-
-
-# WARNING
+## WARNING
 
 * if pdf-preview does NOT work, clean the folder `~/.cache/pre_thumbs`.
 * before clear the cache folder `~/.cache/pre_thumbs`, run `umount ~/.cache/pre_thumbs/mnt` first !!!
