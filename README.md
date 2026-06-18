@@ -79,21 +79,27 @@ ipre <dir> --maxdepth 1   # perform likes yazi
 
 Keybinds:
 
-* basic:
-    1. `Tab`: toggle entry selection
-    2. `` ` ``: switch entry list mode: `all`, `file` and `directory`
-    3. `left`: goto upper directory
-    4. `right`: goto entry point directory
-* copy/cut/paste/delete:
-    5. `alt-x`: cut entry files(directories)
-    6. `alt-c`: copy entry files(directories)
-    7. `alt-v`: paste entry files(directories)
-    8. `alt-r`: delete entry files(directories)
-* misc:
-    9. `alt-.`: toggle hidden files entries
-    10. `alt-p`: toggle preview window
-    11. `alt-a`: copy all entries to clipboard
-    12. `alt-y`: copy current entry to clipboard
+- basic:
+
+  1. `Tab`: toggle entry selection
+  2. `` ` ``: switch entry list mode: `all`, `file`, and `directory`
+  3. `Left`: go to the parent directory
+  4. `Right`: enter the selected directory
+
+- copy/cut/paste/delete:
+
+  1. `Alt-X`: cut selected files/directories
+  2. `Alt-C`: copy selected files/directories
+  3. `Alt-V`: paste files/directories
+  4. `Alt-R`: delete selected files/directories
+
+- misc:
+
+  1. `Alt-.`: toggle hidden files
+  2. `Alt-P`: toggle preview window
+  3. `Alt-A`: copy all entries to the clipboard
+  4. `Alt-Y`: copy the current entry to the clipboard
+
 
 Notes:
 
