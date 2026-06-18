@@ -79,6 +79,7 @@ Keybinds:
 6. `left`: goto upper directory
 7. `right`: goto entry point directory
 8. `Tab`: toggle entry selection
+9. `` ` ``: switch entry list mode: `all`, `files` and `directory`
 
 Notes:
 
