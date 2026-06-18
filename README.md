@@ -48,14 +48,22 @@ Add the following script to your `.zshrc`:
 ```shell
 # change the path
 source /path/to/ipre.zsh
+
+# create an alias which similar to yazi
+alias yy='ipre --max-depth 1'
 ```
 
-To use this function, install the following:
+This function depends on the following stuff:
 
 1. `fd/fzf`   - the kernel
-2. `imv`      - open image
-3. `zathura`  - open pdf
-4. `nvim`     - the text editor
+2. `du`       - show file size
+3. `imv`      - open image
+4. `zathura`  - open pdf
+5. `nvim`     - the text editor
+6. `wl-copy`  - clipboard support
+7. `awk/sed/grep` - as it is
+8. `tr/cut/wc/head/tail` - as it is
+9. zshell / bash builtin
 
 Using examples:
 
@@ -65,21 +73,27 @@ ipre <dir>                # search dir
 ipre <dir_1> ... <dir_n>  # search all of these directories together 
 
 # add more filter to fd
-ipre <dir> -e c           # select files with extension '.c'
+ipre -e c <dir>           # select files with extension '.c'
 ipre <dir> --maxdepth 1   # perform likes yazi
 ```
 
 Keybinds:
 
-1. `alt-p`: toggle preview window
-2. `alt-.`: toggle hidden files entries
-3. `alt-a`: copy all entries to clipboard
-4. `alt-y`: copy current entry to clipboard
-5. `alt-r`: delete entry files(directories) (**THIS IS DANGEROUS**)
-6. `left`: goto upper directory
-7. `right`: goto entry point directory
-8. `Tab`: toggle entry selection
-9. `` ` ``: switch entry list mode: `all`, `files` and `directory`
+* basic:
+    1. `Tab`: toggle entry selection
+    2. `` ` ``: switch entry list mode: `all`, `file` and `directory`
+    3. `left`: goto upper directory
+    4. `right`: goto entry point directory
+* copy/cut/paste/delete:
+    5. `alt-x`: cut entry files(directories)
+    6. `alt-c`: copy entry files(directories)
+    7. `alt-v`: paste entry files(directories)
+    8. `alt-r`: delete entry files(directories)
+* misc:
+    9. `alt-.`: toggle hidden files entries
+    10. `alt-p`: toggle preview window
+    11. `alt-a`: copy all entries to clipboard
+    12. `alt-y`: copy current entry to clipboard
 
 Notes:
 
