@@ -42,15 +42,27 @@ Configure this program by environment variables.
 * set `EZA_ARG` to change the default argument of `eza`;
 * set `FONT_TEXT` to change the sample text in font-preview.
 
-## play with fzf
-Add the following script to your `.zshrc`:
+## play with shell
+Add the scripts - `pre`, `ipre` and `ipre_backend` to your PATH, and then add the following config to your `.zshrc`:
 
 ```shell
-# change the path
-source /path/to/ipre.zsh
+# inline (file) preview in shell
+function ipre() {
+    local tmp="$(mktemp -t "ipre-cwd.XXXXXX")" cwd
+    command ipre "$@" --cwd-file="$tmp"
+    cwd="$(cat -- "$tmp" 2>/dev/null)"
+    [ -n "$cwd" ] && [ "$cwd" != "$PWD" ] && builtin cd -- "$cwd"
+    rm -f -- "$tmp"
+}
 
-# create an alias which similar to yazi
-alias yy='ipre --max-depth 1'
+# NOTE: function 'yy' do NOT support infinite depth
+function yy() {
+    local tmp="$(mktemp -t "ipre-cwd.XXXXXX")" cwd
+    command ipre "$@" --cwd-file="$tmp" --max-depth 1
+    cwd="$(cat -- "$tmp" 2>/dev/null)"
+    [ -n "$cwd" ] && [ "$cwd" != "$PWD" ] && builtin cd -- "$cwd"
+    rm -f -- "$tmp"
+}
 ```
 
 This function depends on the following stuff:
@@ -79,26 +91,31 @@ ipre <dir> --maxdepth 1   # perform likes yazi
 
 Keybinds:
 
-- basic:
-
-  1. `Tab`: toggle entry selection
-  2. `` ` ``: switch entry list mode: `all`, `file`, and `directory`
-  3. `Left`: go to the parent directory
-  4. `Right`: enter the selected directory
-
-- copy/cut/paste/delete:
-
-  1. `Alt-X`: cut selected files/directories
-  2. `Alt-C`: copy selected files/directories
-  3. `Alt-V`: paste files/directories
-  4. `Alt-R`: delete selected files/directories
-
-- misc:
-
-  1. `Alt-.`: toggle hidden files
-  2. `Alt-P`: toggle preview window
-  3. `Alt-A`: copy all entries to the clipboard
-  4. `Alt-Y`: copy the current entry to the clipboard
+```txt
+=== ipre Keybindings ===
+  Enter              : Open file/directory
+  Left/Right         : Navigate parent/child directories
+  `(Backtick)        : Toggle File/Directory/All view
+  Alt+p              : Toggle preview window
+  Alt+.              : Toggle hidden files
+  Alt+0~9            : Set search depth (0 for infinite)
+  Alt+-/=            : Decrease/Increase search depth
+  Alt+o              : Cycle sort mode (name/time/size/ext)
+  Alt+g              : Live Grep (Search file content)
+  Alt+a              : Toggle selection (Invert)
+  Alt+y              : Copy path(s) to clipboard
+  Alt+c/x/v          : Copy/Cut/Paste files
+  Alt+i              : Inspect ipre clipboard
+  Alt+w              : Clear ipre clipboard
+  Alt+r              : Rename selected item(s)
+  Alt+e              : Wdired batch rename
+  Alt+n              : Create new file/directory
+  Alt+d              : Delete selected
+  Alt+s              : Bookmark selected items
+  Alt+b              : Open bookmarks menu
+  Alt+?              : Show this help
+  Alt+q              : Exit and CD to current viewed dir
+```
 
 
 Notes:
@@ -106,6 +123,7 @@ Notes:
 * set `IPRE_FD` to change the default search method;
 * set `EDITOR` to change the default text file opener command;
 * you may need to replace `wl-copy` with your own clipboard program;
+* to use `live grep`(alt-g), you need to install `ripgrep`.
 
 ## WARNING
 
