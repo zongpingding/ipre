@@ -1,0 +1,229 @@
+#!/usr/bin/env zsh
+
+# Inline (file) preview in zshell
+# Dual-File Architecture Frontend
+
+local cmd cmd_str BACKEND_CMD
+
+# Establish dynamic backend resolution and explicitly export it
+BACKEND_CMD="${0:A:h}/ipre_backend"
+if [[ ! -x "$BACKEND_CMD" ]]; then
+    echo "Error: Backend script not found or not executable at $BACKEND_CMD"
+    exit 1
+fi
+export IPRE_BACKEND_CMD="$BACKEND_CMD"
+
+if [[ -n "$IPRE_FD" ]]; then
+    cmd=(${=IPRE_FD})
+else
+    cmd=(
+        fd --follow
+        -E .git -E target -E .cargo -E build -E .npm -E node_modules
+        -E .cache -E dist -E out -E lsp-bridge
+        -E .java -E .gradle -E .nuget -E .steam -E .android
+        -E .ipython -E .vscode -E .vscode-oss -E .oh-my-zsh
+        -E .emacs-tmp -E .pub-cache -E .proxyman
+        . # search all patterns
+    )
+fi
+
+# Parse arguments
+local start_dir="$PWD"
+local keep_open=0
+local cwd_file=""
+local -a extra_args target_dirs
+
+for arg in "$@"; do
+    if [[ "$arg" == "--keep-open" || "$arg" == "--stay" || "$arg" == "--no-leave" ]]; then
+        keep_open=1
+    elif [[ "$arg" == --cwd-file=* ]]; then
+        cwd_file="${arg#*=}"
+    elif [[ -d "$arg" ]]; then
+        target_dirs+=("$(realpath -s "$arg")")
+    else
+        extra_args+=("$arg")
+    fi
+done
+
+if [[ ${#extra_args[@]} -gt 0 ]]; then
+    cmd+=("${extra_args[@]}")
+fi
+
+# =========================================================
+# State Management Consolidation & Configuration Extraction
+# =========================================================
+export IPRE_CACHE_DIR="$HOME/.cache/pre_thumbs"
+export IPRE_DATA_DIR="$HOME/.local/share/ipre"
+export IPRE_RAM_DIR="${XDG_RUNTIME_DIR:-/dev/shm}/ipre_$$"
+
+mkdir -p "$IPRE_CACHE_DIR" "$IPRE_DATA_DIR" "$IPRE_RAM_DIR"
+
+# Persistent / Cache states
+export IPRE_STATE_FILE="$IPRE_CACHE_DIR/fzf_state"
+export IPRE_CWD_FILE="$IPRE_CACHE_DIR/fzf_cwd"
+export IPRE_HIDDEN_FILE="$IPRE_CACHE_DIR/fzf_hidden"
+export IPRE_TARGETS_FILE="$IPRE_CACHE_DIR/fzf_targets"
+export IPRE_CLIP_FILE="$IPRE_CACHE_DIR/fzf_clip"
+export IPRE_FORCE_CD_FILE="$IPRE_CACHE_DIR/fzf_force_cd"
+export IPRE_BOOKMARKS_FILE="$IPRE_DATA_DIR/bookmarks"
+
+# High-speed RAM states
+export IPRE_RAM_LIST_FILE="$IPRE_RAM_DIR/ipre_fzf_list"
+export IPRE_RAM_POS_FILE="$IPRE_RAM_DIR/ipre_fzf_pos"
+export IPRE_RAM_DEPTH_FILE="$IPRE_RAM_DIR/ipre_fzf_depth"
+export IPRE_RAM_FOCUS_FILE="$IPRE_RAM_DIR/ipre_fzf_focus"
+
+export IPRE_SORT_FILE="$IPRE_CACHE_DIR/fzf_sort"
+export IPRE_FD_CMD_STR=$(printf '%q ' "${cmd[@]}")
+
+# Ensure RAM cleanup
+cleanup() {
+    rm -rf "$IPRE_RAM_DIR"
+}
+trap cleanup EXIT
+
+# Initialize states
+rm -f "$IPRE_FORCE_CD_FILE"
+if [[ ${#target_dirs[@]} -eq 1 ]]; then
+    start_dir="${target_dirs[1]}"
+    printf ""> "$IPRE_TARGETS_FILE"
+elif [[ ${#target_dirs[@]} -gt 1 ]]; then
+    start_dir="$PWD"
+    printf "%q " "${target_dirs[@]}" > "$IPRE_TARGETS_FILE"
+else
+    printf "" > "$IPRE_TARGETS_FILE"
+fi
+
+echo "all" > "$IPRE_STATE_FILE"
+echo "$start_dir" > "$IPRE_CWD_FILE"
+echo "true" > "$IPRE_HIDDEN_FILE"
+echo "name" > "$IPRE_SORT_FILE"
+printf "" > "$IPRE_CLIP_FILE"
+echo "0" > "$IPRE_RAM_DEPTH_FILE"
+
+# =========================================================
+# Fzf UI & Keybindings Setup
+# =========================================================
+local -a fzf_binds=(
+    'resize:refresh-preview'
+    "focus,load:transform-header(\"$BACKEND_CMD\" ipre_action_header_info {})+transform-border-label(\"$BACKEND_CMD\" ipre_action_border_status)"
+
+    # Mode switch
+    "\`:reload(\"$BACKEND_CMD\" ipre_action_switch)"
+    "alt-.:execute-silent(\"$BACKEND_CMD\" ipre_action_hidden)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    'alt-p:toggle-preview'
+
+    # Navigate
+    "left:transform:\"$BACKEND_CMD\" ipre_action_left"
+    "right:reload(\"$BACKEND_CMD\" ipre_action_right {})+clear-query"
+    "alt-s:execute-silent(\"$BACKEND_CMD\" ipre_action_bookmark {+})"
+    "alt-b:execute(\"$BACKEND_CMD\" ipre_action_open_bookmarks)+reload(\"$BACKEND_CMD\" ipre_action_run)+clear-query"
+
+    # Depth control
+    "alt-1:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth 1)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    "alt-2:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth 2)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    "alt-3:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth 3)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    "alt-4:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth 4)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    "alt-5:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth 5)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    "alt-6:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth 6)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    "alt-7:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth 7)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    "alt-8:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth 8)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    "alt-9:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth 9)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    "alt-0:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth 0)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    "alt--:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth -)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    "alt-=:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth +)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+
+    # Entry operations
+    "alt-a:toggle-all"
+    "alt-y:execute-silent(cd \"\$(cat '$IPRE_CWD_FILE')\" && realpath -s {+} | wl-copy)"
+
+    "alt-c:execute-silent(\"$BACKEND_CMD\" ipre_action_copy {+})+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    "alt-x:execute-silent(\"$BACKEND_CMD\" ipre_action_cut {+})+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    "alt-d:execute(\"$BACKEND_CMD\" ipre_action_delete {+})+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    "alt-i:execute(\"$BACKEND_CMD\" ipre_action_show_clip)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    "alt-w:execute-silent(\"$BACKEND_CMD\" ipre_action_clear_clip)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+
+    "alt-r:execute(\"$BACKEND_CMD\" ipre_action_rename {+})+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
+    "alt-e:execute(\"$BACKEND_CMD\" ipre_action_wdired {+})+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
+    "alt-v:execute-silent(\"$BACKEND_CMD\" ipre_action_paste)+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
+    "alt-n:execute(\"$BACKEND_CMD\" ipre_action_new)+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
+
+    # sort & live grep
+    "alt-o:execute-silent(\"$BACKEND_CMD\" ipre_action_sort_cycle)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    "alt-g:execute(\"$BACKEND_CMD\" ipre_action_live_grep)+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
+
+    # Misc
+    "alt-?:execute(\"$BACKEND_CMD\" ipre_action_help)"
+    "alt-q:execute-silent(echo 1 > '$IPRE_FORCE_CD_FILE')+abort"
+
+    # Deferred pos()
+    "result:transform:[ -s '$IPRE_RAM_POS_FILE' ] && echo \"pos(\$(cat '$IPRE_RAM_POS_FILE'))\" && printf ''> '$IPRE_RAM_POS_FILE' || true"
+)
+
+if [[ $keep_open -eq 1 ]]; then
+    fzf_binds+=("enter:execute(\"$BACKEND_CMD\" ipre_action_open {+})")
+fi
+
+local -a fzf_args=(
+    --multi
+    --prompt "ipre > "
+    --preview "cd \"\$(cat '$IPRE_CWD_FILE')\" && printf '\033[2J\033[H'; pre {}"
+    --height=50% --reverse
+    --preview-window=right:50%
+    --separator=""
+    --no-scrollbar
+    --border=bottom
+    --preview-border=left
+    --border-label-pos=3:bottom
+)
+for b in "${fzf_binds[@]}"; do
+    fzf_args+=(--bind "$b")
+done
+
+# Execute Fzf
+local -a selected_items
+selected_items=("${(@f)$(
+    "$BACKEND_CMD" ipre_action_run | fzf "${fzf_args[@]}"
+)}")
+
+# =========================================================
+# Post Actions
+# =========================================================
+
+if [[ -f "$IPRE_FORCE_CD_FILE" ]]; then
+    rm -f "$IPRE_FORCE_CD_FILE"
+    if [[ -n "$cwd_file" ]]; then
+        printf "%s" "$(<"$IPRE_CWD_FILE")" > "$cwd_file"
+    fi
+    exit 0
+fi
+
+if [[ ${#selected_items[@]} -eq 0 || -z "${selected_items[1]}" ]]; then
+    exit 0
+fi
+
+local final_cwd="$(<"$IPRE_CWD_FILE")"
+local -a abs_items
+for item in "${selected_items[@]}"; do
+    if [[ "$item" == /* ]]; then
+        abs_items+=("$item")
+    else
+        abs_items+=("$final_cwd/$item")
+    fi
+done
+
+local first_file="${abs_items[1]}"
+if [[ ${#abs_items[@]} -eq 1 && -d "$first_file" ]]; then
+    if [[ -n "$cwd_file" ]]; then
+        printf "%s" "$first_file" > "$cwd_file"
+    fi
+    exit 0
+fi
+
+local ext="${first_file:l:e}"
+case "$ext" in
+    png|jpg|jpeg|gif|webp|bmp|tiff) imv "${abs_items[@]}" &>/dev/null &! ;;
+    pdf|djvu|epub|mobi) zathura "${abs_items[@]}" &>/dev/null &! ;;
+    tar|gz|tgz|xz|txz|bz2|tbz2|zip) exit 0 ;;
+    *) ${EDITOR:-nvim} "${abs_items[@]}" ;;
+esac
