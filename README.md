@@ -1,6 +1,11 @@
-## Example
+## Examples
 
-![](./ipre_example.gif)
+Basic Example:
+![](./ipre_example_basic.gif)
+
+Advanced Example:
+![](./ipre_example_advanced.gif)
+
 
 ## Dependency
 The following programs are required by the `pre` command:
