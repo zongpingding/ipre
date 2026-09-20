@@ -1,8 +1,11 @@
 #!/usr/bin/env zsh
 
-# Inline (file) preview in zshell
-# Dual-File Architecture Frontend
+# Inline (file) previewer in zshell
 
+
+# =========================================================
+# Bootstrap ipre
+# =========================================================
 local cmd cmd_str BACKEND_CMD
 
 # Establish dynamic backend resolution and explicitly export it
@@ -12,7 +15,6 @@ if [[ ! -x "$BACKEND_CMD" ]]; then
     exit 1
 fi
 export IPRE_BACKEND_CMD="$BACKEND_CMD"
-
 if [[ -n "$IPRE_FD" ]]; then
     cmd=(${=IPRE_FD})
 else
@@ -27,36 +29,63 @@ else
     )
 fi
 
+
 # Parse arguments
 local start_dir="$PWD"
 local keep_open=0
 local cwd_file=""
+local initial_depth="0"
 local -a extra_args target_dirs
 
-for arg in "$@"; do
+while [[ $# -gt 0 ]]; do
+    local arg="$1"
     if [[ "$arg" == "--keep-open" || "$arg" == "--stay" || "$arg" == "--no-leave" ]]; then
         keep_open=1
+        shift
     elif [[ "$arg" == --cwd-file=* ]]; then
         cwd_file="${arg#*=}"
+        shift
+    elif [[ "$arg" == "--depth" || "$arg" == "-d" || "$arg" == "--max-depth" ]]; then
+        initial_depth="$2"
+        shift 2
+    elif [[ "$arg" == --depth=* || "$arg" == --max-depth=* ]]; then
+        initial_depth="${arg#*=}"
+        shift
     elif [[ -d "$arg" ]]; then
         target_dirs+=("$(realpath -s "$arg")")
+        shift
     else
         extra_args+=("$arg")
+        shift
     fi
 done
-
 if [[ ${#extra_args[@]} -gt 0 ]]; then
     cmd+=("${extra_args[@]}")
 fi
+
 
 # =========================================================
 # State Management Consolidation & Configuration Extraction
 # =========================================================
 export IPRE_CACHE_DIR="$HOME/.cache/pre_thumbs"
 export IPRE_DATA_DIR="$HOME/.local/share/ipre"
+export IPRE_TRASH_DIR="$IPRE_DATA_DIR/.trash"
 export IPRE_RAM_DIR="${XDG_RUNTIME_DIR:-/dev/shm}/ipre_$$"
+mkdir -p "$IPRE_CACHE_DIR" "$IPRE_DATA_DIR" "$IPRE_RAM_DIR" "$IPRE_TRASH_DIR"
 
-mkdir -p "$IPRE_CACHE_DIR" "$IPRE_DATA_DIR" "$IPRE_RAM_DIR"
+# ICONS setup: Environment & Dependency Detection
+# NOTE: there are 4 modes for icon UI according to coordinate '(IPRE_ICONS, IPRE_USE_LS)':
+#       1. (1, 1) -> use 'ls', prefix with 'd' & '-'
+#       2. (1, 0) -> use 'eza', prefix with icon
+#       3. (0, 1) -> use 'ls', no prefix
+#       4. (0, 0) -> use 'eza', no prefix
+#       *. In tty or eza unavailable, force to use mode 2
+export IPRE_ICONS=1
+export IPRE_USE_LS=0
+if [[ "$TERM" == "linux" || "$(tty)" == /dev/tty[0-9]* ]] || ! command -v eza &> /dev/null; then
+    export IPRE_USE_LS=1
+    export IPRE_ICONS=0
+fi
 
 # Persistent / Cache states
 export IPRE_STATE_FILE="$IPRE_CACHE_DIR/fzf_state"
@@ -64,6 +93,7 @@ export IPRE_CWD_FILE="$IPRE_CACHE_DIR/fzf_cwd"
 export IPRE_HIDDEN_FILE="$IPRE_CACHE_DIR/fzf_hidden"
 export IPRE_TARGETS_FILE="$IPRE_CACHE_DIR/fzf_targets"
 export IPRE_CLIP_FILE="$IPRE_CACHE_DIR/fzf_clip"
+export IPRE_SELECT_FILE="$IPRE_CACHE_DIR/fzf_select"
 export IPRE_FORCE_CD_FILE="$IPRE_CACHE_DIR/fzf_force_cd"
 export IPRE_BOOKMARKS_FILE="$IPRE_DATA_DIR/bookmarks"
 
@@ -72,13 +102,18 @@ export IPRE_RAM_LIST_FILE="$IPRE_RAM_DIR/ipre_fzf_list"
 export IPRE_RAM_POS_FILE="$IPRE_RAM_DIR/ipre_fzf_pos"
 export IPRE_RAM_DEPTH_FILE="$IPRE_RAM_DIR/ipre_fzf_depth"
 export IPRE_RAM_FOCUS_FILE="$IPRE_RAM_DIR/ipre_fzf_focus"
-
 export IPRE_SORT_FILE="$IPRE_CACHE_DIR/fzf_sort"
 export IPRE_FD_CMD_STR=$(printf '%q ' "${cmd[@]}")
+export IPRE_LAST_FILE="$IPRE_RAM_DIR/last_previewed_file_cached"
+export IPRE_PAGE_FILE="$IPRE_RAM_DIR/preview_page"
+export IPRE_PAGE_MAX_FILE="$IPRE_RAM_DIR/preview_page_max_cached"
 
-# Ensure RAM cleanup
+
+# Ensure RAM cleanup securely
 cleanup() {
-    rm -rf "$IPRE_RAM_DIR"
+    if [[ -n "$IPRE_RAM_DIR" && -d "$IPRE_RAM_DIR" && "$IPRE_RAM_DIR" == *"ipre"* ]]; then
+        rm -rf "$IPRE_RAM_DIR"
+    fi
 }
 trap cleanup EXIT
 
@@ -86,7 +121,7 @@ trap cleanup EXIT
 rm -f "$IPRE_FORCE_CD_FILE"
 if [[ ${#target_dirs[@]} -eq 1 ]]; then
     start_dir="${target_dirs[1]}"
-    printf ""> "$IPRE_TARGETS_FILE"
+    printf "" > "$IPRE_TARGETS_FILE"
 elif [[ ${#target_dirs[@]} -gt 1 ]]; then
     start_dir="$PWD"
     printf "%q " "${target_dirs[@]}" > "$IPRE_TARGETS_FILE"
@@ -94,32 +129,32 @@ else
     printf "" > "$IPRE_TARGETS_FILE"
 fi
 
-echo "all" > "$IPRE_STATE_FILE"
-echo "$start_dir" > "$IPRE_CWD_FILE"
-echo "true" > "$IPRE_HIDDEN_FILE"
-echo "name" > "$IPRE_SORT_FILE"
-printf "" > "$IPRE_CLIP_FILE"
-echo "0" > "$IPRE_RAM_DEPTH_FILE"
+echo ""                 > "$IPRE_CLIP_FILE"
+echo "all"              > "$IPRE_STATE_FILE"
+echo "true"             > "$IPRE_HIDDEN_FILE"
+echo "name"             > "$IPRE_SORT_FILE"
+echo "$start_dir"       > "$IPRE_CWD_FILE"
+echo "1"                > "$IPRE_PAGE_FILE"
+echo "$initial_depth"   > "$IPRE_RAM_DEPTH_FILE"
+
 
 # =========================================================
 # Fzf UI & Keybindings Setup
 # =========================================================
+
+# keybind
 local -a fzf_binds=(
-    'resize:refresh-preview'
+    "esc:ignore"
+    "ctrl-q:abort"
+    'alt-p:toggle-preview'
+    "resize:refresh-preview"
     "focus,load:transform-header(\"$BACKEND_CMD\" ipre_action_header_info {})+transform-border-label(\"$BACKEND_CMD\" ipre_action_border_status)"
 
-    # Mode switch
+    #####     simple entry operation     #####
     "\`:reload(\"$BACKEND_CMD\" ipre_action_switch)"
     "alt-.:execute-silent(\"$BACKEND_CMD\" ipre_action_hidden)+reload(\"$BACKEND_CMD\" ipre_action_run)"
-    'alt-p:toggle-preview'
-
-    # Navigate
-    "left:transform:\"$BACKEND_CMD\" ipre_action_left"
-    "right:reload(\"$BACKEND_CMD\" ipre_action_right {})+clear-query"
-    "alt-s:execute-silent(\"$BACKEND_CMD\" ipre_action_bookmark {+})"
-    "alt-b:execute(\"$BACKEND_CMD\" ipre_action_open_bookmarks)+reload(\"$BACKEND_CMD\" ipre_action_run)+clear-query"
-
-    # Depth control
+    "alt-o:execute-silent(\"$BACKEND_CMD\" ipre_action_sort_cycle)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    # depth control
     "alt-1:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth 1)+reload(\"$BACKEND_CMD\" ipre_action_run)"
     "alt-2:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth 2)+reload(\"$BACKEND_CMD\" ipre_action_run)"
     "alt-3:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth 3)+reload(\"$BACKEND_CMD\" ipre_action_run)"
@@ -132,42 +167,53 @@ local -a fzf_binds=(
     "alt-0:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth 0)+reload(\"$BACKEND_CMD\" ipre_action_run)"
     "alt--:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth -)+reload(\"$BACKEND_CMD\" ipre_action_run)"
     "alt-=:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth +)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    "alt-+:execute(\"$BACKEND_CMD\" ipre_action_smart_diff)+reload(\"$BACKEND_CMD\" ipre_action_run)"
 
-    # Entry operations
-    "alt-a:toggle-all"
-    "alt-y:execute-silent(cd \"\$(cat '$IPRE_CWD_FILE')\" && realpath -s {+} | wl-copy)"
+    #####     Entry list navigation     #####
+    "left:transform:\"$BACKEND_CMD\" ipre_action_left"
+    "right:reload(\"$BACKEND_CMD\" ipre_action_right {})+clear-query"
 
-    "alt-c:execute-silent(\"$BACKEND_CMD\" ipre_action_copy {+})+reload(\"$BACKEND_CMD\" ipre_action_run)"
-    "alt-x:execute-silent(\"$BACKEND_CMD\" ipre_action_cut {+})+reload(\"$BACKEND_CMD\" ipre_action_run)"
-    "alt-d:execute(\"$BACKEND_CMD\" ipre_action_delete {+})+reload(\"$BACKEND_CMD\" ipre_action_run)"
-    "alt-i:execute(\"$BACKEND_CMD\" ipre_action_show_clip)+reload(\"$BACKEND_CMD\" ipre_action_run)"
-    "alt-w:execute-silent(\"$BACKEND_CMD\" ipre_action_clear_clip)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    #####     Dynamic Smart Scroll (Page flip for PDF, Native scroll for Code)    #####
+    "ctrl-f:transform(\"$BACKEND_CMD\" ipre_action_smart_scroll down {})"
+    "ctrl-b:transform(\"$BACKEND_CMD\" ipre_action_smart_scroll up {})"
 
-    "alt-r:execute(\"$BACKEND_CMD\" ipre_action_rename {+})+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
-    "alt-e:execute(\"$BACKEND_CMD\" ipre_action_wdired {+})+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
-    "alt-v:execute-silent(\"$BACKEND_CMD\" ipre_action_paste)+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
+    #####     Modify entry: select|create|copy|cut|delete|rename etc     #####
+    "alt-s:execute-silent(\"$BACKEND_CMD\" ipre_action_mark {+})+transform-border-label(\"$BACKEND_CMD\" ipre_action_border_status)+deselect-all"
     "alt-n:execute(\"$BACKEND_CMD\" ipre_action_new)+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
+    "alt-c:execute-silent(\"$BACKEND_CMD\" ipre_action_copy {+})+transform-border-label(\"$BACKEND_CMD\" ipre_action_border_status)+deselect-all"
+    "alt-x:execute-silent(\"$BACKEND_CMD\" ipre_action_cut {+})+transform-border-label(\"$BACKEND_CMD\" ipre_action_border_status)+deselect-all"
+    "alt-v:execute-silent(\"$BACKEND_CMD\" ipre_action_paste)+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
+    "alt-d:execute(\"$BACKEND_CMD\" ipre_action_delete {+})+reload(\"$BACKEND_CMD\" ipre_action_run)+clear-query"
+    "alt-r:execute(\"$BACKEND_CMD\" ipre_action_rename {+})+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
+    "alt-w:execute(\"$BACKEND_CMD\" ipre_action_wdired {+})+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
 
-    # sort & live grep
-    "alt-o:execute-silent(\"$BACKEND_CMD\" ipre_action_sort_cycle)+reload(\"$BACKEND_CMD\" ipre_action_run)"
-    "alt-g:execute(\"$BACKEND_CMD\" ipre_action_live_grep)+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
+    #####     selection & clip system management     #####
+    "alt-a:toggle-all"
+    "alt-y:execute-silent(cd \"\$(cat '$IPRE_CWD_FILE')\" && realpath -s {+} | wl-copy)+deselect-all"
+    "alt-i:execute(\"$BACKEND_CMD\" ipre_action_show_buffers)+reload(\"$BACKEND_CMD\" ipre_action_run)+transform-border-label(\"$BACKEND_CMD\" ipre_action_border_status)+clear-query"
 
-    # Misc
+    #####     ipre utils     #####
     "alt-?:execute(\"$BACKEND_CMD\" ipre_action_help)"
-    "alt-q:execute-silent(echo 1 > '$IPRE_FORCE_CD_FILE')+abort"
+    "alt-m:execute-silent(\"$BACKEND_CMD\" ipre_action_bookmark {+})"
+    "alt-b:execute(\"$BACKEND_CMD\" ipre_action_open_bookmarks)+reload(\"$BACKEND_CMD\" ipre_action_run)+clear-query"
+    "alt-g:execute(\"$BACKEND_CMD\" ipre_action_live_grep)+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
+    "alt-t:execute(\"$BACKEND_CMD\" ipre_action_zoxide)+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
+    "alt-space:execute(\"$BACKEND_CMD\" ipre_action_command_palette {+})+reload(\"$BACKEND_CMD\" ipre_action_run)"
 
-    # Deferred pos()
+    #####     ipre post action config     #####
+    "alt-q:execute-silent(echo 1 > '$IPRE_FORCE_CD_FILE')+abort"
+    # deferred pos()
     "result:transform:[ -s '$IPRE_RAM_POS_FILE' ] && echo \"pos(\$(cat '$IPRE_RAM_POS_FILE'))\" && printf ''> '$IPRE_RAM_POS_FILE' || true"
 )
-
 if [[ $keep_open -eq 1 ]]; then
     fzf_binds+=("enter:execute(\"$BACKEND_CMD\" ipre_action_open {+})")
 fi
 
+# fzf UI arguments & fzf arguments finalize
 local -a fzf_args=(
     --multi
     --prompt "ipre > "
-    --preview "cd \"\$(cat '$IPRE_CWD_FILE')\" && printf '\033[2J\033[H'; pre {}"
+    --preview "\"$BACKEND_CMD\" ipre_action_preview_with_page {} 2>/dev/null"
     --height=50% --reverse
     --preview-window=right:50%
     --separator=""
@@ -180,16 +226,18 @@ for b in "${fzf_binds[@]}"; do
     fzf_args+=(--bind "$b")
 done
 
-# Execute Fzf
+# execute fzf
 local -a selected_items
 selected_items=("${(@f)$(
     "$BACKEND_CMD" ipre_action_run | fzf "${fzf_args[@]}"
 )}")
 
+
 # =========================================================
 # Post Actions
 # =========================================================
 
+# setup final CWD for directory changing 
 if [[ -f "$IPRE_FORCE_CD_FILE" ]]; then
     rm -f "$IPRE_FORCE_CD_FILE"
     if [[ -n "$cwd_file" ]]; then
@@ -198,13 +246,18 @@ if [[ -f "$IPRE_FORCE_CD_FILE" ]]; then
     exit 0
 fi
 
+# exit ipre if nothing selected
 if [[ ${#selected_items[@]} -eq 0 || -z "${selected_items[1]}" ]]; then
     exit 0
 fi
 
-local final_cwd="$(<"$IPRE_CWD_FILE")"
+# patch for icon interface
+# NOTE: Strip icon and leading space if icons are enabled
 local -a abs_items
+local final_cwd="$(<"$IPRE_CWD_FILE")"
 for item in "${selected_items[@]}"; do
+    [[ $IPRE_ICONS -eq 1 ]] && item="${item#* }"
+
     if [[ "$item" == /* ]]; then
         abs_items+=("$item")
     else
@@ -212,6 +265,7 @@ for item in "${selected_items[@]}"; do
     fi
 done
 
+# file opener
 local first_file="${abs_items[1]}"
 if [[ ${#abs_items[@]} -eq 1 && -d "$first_file" ]]; then
     if [[ -n "$cwd_file" ]]; then
@@ -219,7 +273,6 @@ if [[ ${#abs_items[@]} -eq 1 && -d "$first_file" ]]; then
     fi
     exit 0
 fi
-
 local ext="${first_file:l:e}"
 case "$ext" in
     png|jpg|jpeg|gif|webp|bmp|tiff) imv "${abs_items[@]}" &>/dev/null &! ;;

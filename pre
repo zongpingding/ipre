@@ -8,22 +8,83 @@
 #   1. chafa    - print image in terminal(kernel)
 #   2. eza      - preview directory
 #   3. bat      - preview text/source files
-#   4. pdftoppm - preview pdf files
-#   5. ddjvu    - preview djvu files
+#   4. pdftoppm - preview pdf files(pdfinfo to count pdf pages)
+#   5. ddjvu    - preview djvu files(djvused to count djvu pages)
 #   6. magick   - preview fonts
 #   7. ffmpegthumbnailer      - preview videos
 #   8. archivemount/fuse-zip  - preview tar(.gz) or zip files
 #   9. gnome-epub-thumbnailer - preview EPub or MOBI books
 
-local file="$1"
-local target_page="$2"
 
-# Validate if target_page is a positive integer, otherwise default to 1
-if [[ -z "$target_page" ]] || ! [[ "$target_page" =~ ^[0-9]+$ ]]; then
-    target_page=1
+# Unified File Type checker
+file_type_assert() {
+    local file="$1"
+    local keyword="$2"
+    local mapped_type="$3"
+    if file --mime-type -b "$file" 2>/dev/null | grep -qi "$keyword"; then
+        echo "$mapped_type"
+        return 0
+    fi
+    return 1
+}
+get_file_type() {
+    local file="$1"
+    local ext="$2"
+    # 1. Fast path: Match by extension
+    case "$ext" in
+        txt|md|org|json|yaml|yml|log|hs|r|c|cc|cpp|h|hh|py|sh|zsh|el|tex|sty|cls|dtx) echo "text" ; return ;;
+        png|jpg|jpeg|svg|gif|webp|bmp|tiff) echo "image" ; return ;;
+        ppm) echo "ppm" ; return ;;
+        pdf) echo "pdf" ; return ;;
+        djvu) echo "djvu" ; return ;;
+        epub|mobi) echo "epmo" ; return ;;
+        ttf|otf|ttc|otc|woff|woff2) echo "font" ; return ;;
+        mp4|mkv|mov|mpv|avi|wmv|flv|webm|ts|m2ts|vob|3gp) echo "video" ; return ;;
+        tar|gz|tgz|xz|txz|bz2|tbz2) echo "archive" ; return ;;
+        zip) echo "zip" ; return ;;
+    esac
+    # 2. Slow path: If extension is missing or unknown, probe MIME type
+    file_type_assert    "$file" "pdf"                 "pdf"      &&  return
+    file_type_assert    "$file" "djvu"                "djvu"     &&  return
+    file_type_assert    "$file" "epub"                "epmo"     &&  return
+    file_type_assert    "$file" "mobi"                "epmo"     &&  return
+    file_type_assert    "$file" "x-portable-pixmap"   "ppm"      &&  return # must before 'image' assert
+    file_type_assert    "$file" "image"               "image"    &&  return
+    file_type_assert    "$file" "text"                "text"     &&  return
+    file_type_assert    "$file" "executable"          "binary"   &&  return
+    file_type_assert    "$file" "font"                "font"     &&  return
+    file_type_assert    "$file" "gzip"                "archive"  &&  return
+    file_type_assert    "$file" "zip"                 "zip"      &&  return
+    # 3. Unknown
+    echo "unknown"
+}
+
+# Intercept specific function calls
+if [[ "$1" == "get_file_type" ]]; then
+    shift # Remove 'get_file_type' from arguments, making $2 become $1
+    get_file_type "$@"
+    exit 0
 fi
 
+
+
+# ==========================================
+# Main Aux functions
+# ==========================================
+local file="$1"
 local ext="${file:l:e}" # Extract lowercase extension
+local pre_opt_arg="$2"
+local is_page_mode=0
+local cur_page_opt=1
+
+# Parse the Tagging Protocol
+if [[ "$pre_opt_arg" == PAGE:* ]]; then
+    is_page_mode=1
+    cur_page_opt="${pre_opt_arg#PAGE:}"
+elif [[ -n "$pre_opt_arg" && "$pre_opt_arg" =~ ^[0-9]+$ ]]; then
+    cur_page_opt="$pre_opt_arg"
+fi
+
 if [[ -n "$FZF_PREVIEW_COLUMNS" && -n "$FZF_PREVIEW_LINES" ]]; then
     local view_size="${FZF_PREVIEW_COLUMNS}x${FZF_PREVIEW_LINES}"
 else
@@ -31,7 +92,8 @@ else
 fi
 local cache_dir="$HOME/.cache/pre_thumbs"
 local mnt_point="$HOME/.cache/pre_thumbs/mnt"
-local MAX_DIR_ITEMS=200
+local MAX_DIR_LINES=200
+local MAX_SRC_LINES=1500
 local MAX_FIX=3
 
 # eza argument
@@ -73,7 +135,7 @@ thumb_cache() {
     local mtime key img
     mtime=$(stat -c %Y "$file" 2>/dev/null) || return 1
     key=$(printf "%s_%s_%s" "$file" "$mtime" "$hash_salt" | md5sum | awk '{print $1}')
-    
+
     img="$cache_dir/${prefix}_${key}.png"
     if [[ ! -f "$img" ]]; then
         "$gen_cmd" "$file" "$img"
@@ -83,11 +145,33 @@ thumb_cache() {
 
 # Image generators...
 gen_video_thumb() { ffmpegthumbnailer -s 0 -i "$1" -o "$2" &>/dev/null; }
-gen_pdf_thumb()   { pdftoppm -f "$target_page" -singlefile -png -rx 100 -ry 100 "$1" "${2%.png}" >/dev/null 2>&1; }
-gen_djvu_thumb()  { ddjvu -format=tiff -page="$target_page" "$1" "$2" >/dev/null 2>&1; }
+gen_pdf_thumb()   {
+    if command -v pdfinfo &> /dev/null; then
+        page_max="$(pdfinfo "$file" 2>/dev/null | awk '/^Pages:/ {print $2}')"
+    else
+        page_max=1
+    fi
+    if [[ cur_page_opt -gt page_max ]]; then 
+        pdftoppm -f "$page_max" -singlefile -png -rx 100 -ry 100 "$1" "${2%.png}" >/dev/null 2>&1;
+    else
+        pdftoppm -f "$cur_page_opt" -singlefile -png -rx 100 -ry 100 "$1" "${2%.png}" >/dev/null 2>&1;
+    fi
+}
+gen_djvu_thumb()   {
+    if command -v djvused &> /dev/null; then
+        page_max="$(djvused -e 'n' "$file" 2>/dev/null)"
+    else
+        page_max=1
+    fi
+    if [[ cur_page_opt -gt page_max ]]; then 
+        ddjvu -format=tiff -page="$page_max" "$1" "$2" >/dev/null 2>&1
+    else
+        ddjvu -format=tiff -page="$cur_page_opt" "$1" "$2" >/dev/null 2>&1
+    fi
+}
 gen_epmo_thumb()  { gnome-epub-thumbnailer "$1" "$2" >/dev/null 2>&1; }
 gen_ppm_thumb()   { magick "$1" "$2" &>/dev/null; }
-gen_font_thumb()  { 
+gen_font_thumb()  {
     magick -gravity center -size 400x400 \
            -background "#ffffff" -fill "#000000" \
            -font "$1" caption:"$font_text" "$2"
@@ -121,51 +205,6 @@ img_preview_fix() {
     fi
 }
 
-file_type_assert() {
-    local file="$1"
-    local keyword="$2"
-    local mapped_type="$3"
-    if file --mime-type -b "$file" 2>/dev/null | grep -qi "$keyword"; then
-        echo "$mapped_type"
-        return 0
-    fi
-    return 1
-}
-
-# Unified File Type Router
-get_file_type() {
-    local file="$1"
-    local ext="$2"
-
-    # 1. Fast path: Match by extension
-    case "$ext" in
-        txt|md|org|json|yaml|yml|log|hs|r|c|cc|cpp|h|hh|py|sh|zsh|el|tex|sty|cls|dtx) echo "text" ; return ;;
-        png|jpg|jpeg|svg|gif|webp|bmp|tiff) echo "image" ; return ;;
-        ppm) echo "ppm" ; return ;;
-        pdf) echo "pdf" ; return ;;
-        djvu) echo "djvu" ; return ;;
-        epub|mobi) echo "epmo" ; return ;;
-        ttf|otf|ttc|otc|woff|woff2) echo "font" ; return ;;
-        mp4|mkv|mov|mpv|avi|wmv|flv|webm|ts|m2ts|vob|3gp) echo "video" ; return ;;
-        tar|gz|tgz|xz|txz|bz2|tbz2) echo "archive" ; return ;;
-        zip) echo "zip" ; return ;;
-    esac
-
-    # 2. Slow path: If extension is missing or unknown, probe MIME type
-    file_type_assert    "$file" "pdf"                 "pdf"      &&  return
-    file_type_assert    "$file" "djvu"                "djvu"     &&  return
-    file_type_assert    "$file" "epub"                "epmo"     &&  return
-    file_type_assert    "$file" "mobi"                "epmo"     &&  return
-    file_type_assert    "$file" "x-portable-pixmap"   "ppm"      &&  return # must before 'image' assert
-    file_type_assert    "$file" "image"               "image"    &&  return
-    file_type_assert    "$file" "text"                "text"     &&  return
-    file_type_assert    "$file" "executable"          "binary"   &&  return
-    file_type_assert    "$file" "font"                "font"     &&  return
-    file_type_assert    "$file" "gzip"                "archive"  &&  return
-    file_type_assert    "$file" "zip"                 "zip"      &&  return
-
-    echo "unknown"
-}
 
 # ==========================================
 # Main Execution
@@ -173,7 +212,7 @@ get_file_type() {
 
 # 1. Handle directories directly
 if [[ -d "$file" ]]; then
-    eza "${eza_arg[@]}" "$file" | head -$MAX_DIR_ITEMS
+    eza "${eza_arg[@]}" "$file" | head -$MAX_DIR_LINES
     exit 0
 fi
 
@@ -185,9 +224,13 @@ case "$file_type" in
     text)
         # Use bat if available, otherwise fallback to cat
         if command -v bat &> /dev/null; then
-            bat --style=numbers --color=always --line-range :$MAX_DIR_ITEMS "$file"
+            if [[ $is_page_mode -eq 1 || -z "$cur_page_opt" ]]; then
+                bat --style=numbers --color=always --line-range :$MAX_SRC_LINES "$file"
+            else
+                bat --style=numbers --color=always --line-range :$MAX_SRC_LINES --highlight-line "$cur_page_opt" "$file"
+            fi
         else
-            head -n "$MAX_DIR_ITEMS" "$file"
+            head -n "$MAX_SRC_LINES" "$file"
         fi
         ;;
     image)
@@ -199,11 +242,11 @@ case "$file_type" in
         img_preview_fix "$file" "$img" gen_ppm_thumb
         ;;
     pdf)
-        img=$(thumb_cache "$file" "PDF_P${target_page}" gen_pdf_thumb "$salt_default")
+        img=$(thumb_cache "$file" "PDF_P$cur_page_opt" gen_pdf_thumb "$salt_default")
         img_preview_fix "$file" "$img" gen_pdf_thumb
         ;;
     djvu)
-        img=$(thumb_cache "$file" "DJVU_P${target_page}" gen_djvu_thumb "$salt_default")
+        img=$(thumb_cache "$file" "DJVU_P$cur_page_opt" gen_djvu_thumb "$salt_default")
         img_preview_fix "$file" "$img" gen_djvu_thumb
         ;;
     epmo)
@@ -221,12 +264,12 @@ case "$file_type" in
     zip)
         cleanup_mount
         fuse-zip -r "$file" "$mnt_point"
-        eza "${eza_arg[@]}" "$mnt_point" | head -$MAX_DIR_ITEMS
+        eza "${eza_arg[@]}" "$mnt_point" | head -$MAX_DIR_LINES
         ;;
     archive)
         cleanup_mount
         archivemount "$file" "$mnt_point" -o readonly,nosave
-        eza "${eza_arg[@]}" "$mnt_point" | head -$MAX_DIR_ITEMS
+        eza "${eza_arg[@]}" "$mnt_point" | head -$MAX_DIR_LINES
         ;;
     binary)
         file "$file" | fmt -s

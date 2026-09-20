@@ -1,0 +1,315 @@
+#!/usr/bin/env zsh
+
+# =========================================================
+# Command Palette Handlers
+# =========================================================
+
+ipre_palette_do_open() {
+    [[ $# -eq 0 ]] && return
+    local app="xdg-open"
+    [[ "$(uname)" == "Darwin" ]] && app="open"
+    
+    local i
+    for i in "$@"; do
+        "$app" "$i" > /dev/null 2>&1 &
+    done
+}
+
+
+# In ipre-palette:
+ipre_palette_do_checksum() {
+    [[ $# -eq 0 ]] && return
+    clear
+    enter_alt_screen
+    print_title "Checksum Generator"
+    local i
+    for i in "$@"; do
+        [[ ! -f "$i" ]] && continue
+        printf "%bFile: %s%b\n" "$C_CYN" "$i" "$C_RST"
+        if command -v sha256sum &> /dev/null; then
+            sha256sum "$i"
+            md5sum "$i"
+        else
+            shasum -a 256 "$i"
+        fi
+        echo ""
+    done
+    printf "Press any key to return..."
+    read -k 1 -s _ < /dev/tty
+    leave_alt_screen
+}
+
+ipre_palette_do_compress() {
+    [[ $# -eq 0 ]] && return
+    enter_alt_screen
+    local default_name="archive.tar.gz"
+    if [[ $# -eq 1 ]]; then
+        local base_name="${1:t}"
+        default_name="${base_name}.tar.gz"
+    fi
+    local archive_name="$default_name"
+    if ! vared -p "Enter archive name (e.g., backup.zip or source.tar.gz): " archive_name </dev/tty; then
+        echo ""
+        print_warn "Compression aborted by user."
+        sleep 1
+        leave_alt_screen
+        return
+    fi
+    if [[ -z "$archive_name" ]]; then
+        leave_alt_screen
+        return
+    fi
+    case "${archive_name:l:e}" in
+        zip)      zip -r    "$archive_name" "$@" ;;
+        gz|tgz)   tar -czvf "$archive_name" "$@" ;;
+        bz2|tbz2) tar -cjvf "$archive_name" "$@" ;;
+        xz|txz)   tar -cJvf "$archive_name" "$@" ;;
+        *) 
+            print_warn "Unsupported extension, defaulting to tar.gz"
+            tar -czvf "${archive_name}.tar.gz" "$@" 
+            ;;
+    esac
+    printf "\n%bPress any key to return...%b" "$C_CYN" "$C_RST"
+    read -k 1 -s _ < /dev/tty
+    leave_alt_screen
+}
+
+ipre_palette_do_extract() {
+    enter_alt_screen
+    print_title "Archive Extractor"
+    local i
+    for i in "$@"; do
+        [[ ! -f "$i" ]] && continue
+        local base_name="${i:t}"
+        local default_dir="${${base_name:r}%.tar}"
+        local target_dir="$default_dir"
+        printf "%bArchive: %s%b\n" "$C_CYN" "$base_name" "$C_RST"
+        # NOTE: Use Zsh's native vared (Variable Editor) to allow interactive editing.
+        #       It natively supports arrow keys and vim/Emac key binds.
+        if ! vared -p "Extract to: " target_dir </dev/tty; then
+            echo ""
+            printf "%bSkipping %s (Aborted by user)%b\n\n" "$C_YLW" "$base_name" "$C_RST"
+            continue
+        fi
+
+        # Guard: If the user deletes everything and leaves it empty
+        if [[ -z "$target_dir" ]]; then
+            printf "%bSkipping %s (Empty target directory)%b\n\n" "$C_YLW" "$base_name" "$C_RST"
+            continue
+        fi
+        if [[ -e "$target_dir" ]]; then
+            if [[ ! -d "$target_dir" ]]; then
+                printf "%bSkipping %s ('%s' exists but is a file)%b\n\n" "$C_RED" "$base_name" "$target_dir" "$C_RST"
+                continue
+            fi
+            # Zsh native check: fetch contents including hidden files (N=nullglob, D=dotglob)
+            local contents=("$target_dir"/*(ND))
+            if (( ${#contents[@]} > 0 )); then
+                printf "%bSkipping %s (Directory '%s' exists and is not empty)%b\n\n" "$C_YLW" "$base_name" "$target_dir" "$C_RST"
+                continue
+            fi
+            # If the directory exists but is perfectly empty. Proceed.
+        else
+            mkdir -p "$target_dir"
+        fi
+        printf "%bExtracting into %s/...%b\n" "$C_CYN" "$target_dir" "$C_RST"
+        case "${i:l:e}" in
+            zip)        unzip     "$i" -d "$target_dir" ;;
+            tar)        tar -xvf  "$i" -C "$target_dir" ;;
+            gz|tgz)     tar -xzvf "$i" -C "$target_dir" ;;
+            bz2|tbz2)   tar -xjvf "$i" -C "$target_dir" ;;
+            xz|txz)     tar -xJvf "$i" -C "$target_dir" ;;
+            *) 
+                printf "%bCannot extract %s. Unsupported format.%b\n" "$C_RED" "$i" "$C_RST"
+                rmdir "$target_dir" 2>/dev/null
+                ;;
+        esac
+        echo "─────────────────────────────────────────"
+    done
+    printf "%bAll extraction tasks completed.%b\n" "$C_GRN" "$C_RST"
+    printf "Press any key to return..."
+    read -k 1 -s _ < /dev/tty
+    leave_alt_screen
+}
+
+ipre_palette_do_chmod() {
+    chmod +x "$@"
+}
+
+ipre_palette_do_shell_cmd() {
+    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    clear
+    enter_alt_screen
+    print_title "Execute Shell Command"
+    
+    local cmd_str
+    if ! vared -p "Enter command: " cmd_str </dev/tty; then
+        echo ""
+        printf "%bSkipping (Aborted by user)%b\n\n" "$C_YLW" "$C_RST"
+        continue
+    fi
+    [[ -z "$cmd_str" ]] && return
+
+    printf "\nSelect execution mode:\n"
+    printf "  [%b b %b] Blocking (Runs in foreground, waits for completion)\n" "$C_YLW" "$C_RST"
+    printf "  [%b n %b] Non-blocking (Runs in background, closes instantly)\n" "$C_CYN" "$C_RST"
+    printf "Choice: "
+    
+    local mode
+    read -k 1 -s mode < /dev/tty
+    echo ""
+
+    case "$mode" in
+        b|B)
+            clear
+            print_title "Command Output"
+            # Run in foreground and keep stdout/stderr on terminal
+            eval "$cmd_str" 2>&1
+            printf "\n%bCommand finished.%b Press any key to return..." "$C_GRN" "$C_RST"
+            read -k 1 -s _ < /dev/tty
+            leave_alt_screen
+            ;;
+        n|N)
+            # Run in background, redirect outputs to prevent terminal corruption
+            eval "$cmd_str" >/dev/null 2>&1 &
+            clear
+            printf "%bCommand dispatched to background.%b\n" "$C_GRN" "$C_RST"
+            sleep 0.5
+            leave_alt_screen
+            ;;
+        *)
+            print_warn "Invalid mode. Aborted."
+            sleep 0.5
+            leave_alt_screen
+            ;;
+    esac
+}
+
+ipre_palette_do_git_add() {
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        git add "$@"
+    fi
+}
+
+ipre_palette_do_trash_empty() {
+    if [[ -n "$IPRE_TRASH_DIR" && -d "$IPRE_TRASH_DIR" ]]; then
+        rm -rf "$IPRE_TRASH_DIR"
+        mkdir -p "$IPRE_TRASH_DIR"
+        clear
+        printf "%bTrash bin emptied.%b\n" "$C_GRN" "$C_RST"
+    else
+        clear
+        print_warn "Trash directory is not set or invalid."
+    fi
+    sleep 0.5
+}
+
+ipre_palette_do_trash_restore() {
+    local -a trash_items=("${(@f)$(ls -A "$IPRE_TRASH_DIR" 2>/dev/null)}")
+    if [[ ${#trash_items[@]} -eq 0 || -z "${trash_items[1]}" ]]; then
+        clear
+        print_warn "Trash bin is empty."
+        sleep 0.5
+        exit 0
+    fi
+
+    local -a fzf_input=()
+    local raw name ts display_date line_str
+    for raw in "${trash_items[@]}"; do
+        if [[ "$raw" == *___* ]]; then
+            name="${raw%___*}"
+            ts="${raw##*___}"
+            display_date="$(date -d "@$ts" "+%Y-%m-%d %H:%M:%S" 2>/dev/null)"
+            [[ -z "$display_date" ]] && display_date="$ts"
+
+            printf -v line_str "[%s]\t%s\t%s" "$display_date" "$name" "$raw"
+            fzf_input+=("$line_str")
+        else
+            printf -v line_str "[Unknown Date]\t%s\t%s" "$raw" "$raw"
+            fzf_input+=("$line_str")
+        fi
+    done
+
+    enter_alt_screen
+    local selected
+    selected=$(printf "%s\n" "${fzf_input[@]}" | fzf --prompt "Restore> " --multi --reverse --delimiter=$'\t' --with-nth=1,2)
+    leave_alt_screen
+
+    [[ -z "$selected" ]] && return
+
+    local line raw_file target_name dest counter base ext
+    local cwd="$(<"$IPRE_CWD_FILE")"
+
+    echo "$selected" | while read -r line; do
+        [[ -z "$line" ]] && continue
+        raw_file="$(awk -F'\t' '{print $3}' <<< "$line")"
+        target_name="${raw_file%___*}"
+        dest="$cwd/$target_name"
+
+        counter=1
+        ext="${target_name:e}"
+        base="${target_name:r}"
+
+        if [[ -z "$base" ]]; then
+            base="$target_name"
+            ext=""
+        else
+            [[ -n "$ext" ]] && ext=".$ext"
+        fi
+
+        while [[ -e "$dest" ]]; do
+            dest="$cwd/${base}_restored${counter}${ext}"
+            ((counter++))
+        done
+
+        mv -- "$IPRE_TRASH_DIR/$raw_file" "$dest"
+    done
+    clear
+    enter_alt_screen
+    printf "%bFiles restored successfully.%b\n" "$C_GRN" "$C_RST"
+    sleep 0.5
+    leave_alt_screen
+}
+
+# =========================================================
+# Main Command Palette Entry (UI)
+# =========================================================
+
+ipre_action_command_palette() {
+    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    enter_alt_screen
+
+    local -a options=(
+        "chmod    | [System]   Make executable (+x)"
+        "open     | [System]   Open with default GUI app"
+        "shell    | [System]   Execute shell command (Block/Non-block)|Unsafe"
+        "compress | [Archive]  Compress selected items"
+        "extract  | [Archive]  Extract archive here"
+        "gitadd   | [Git]      Add selected to staging"
+        "checksum | [Security] Calculate MD5/SHA256 hash"
+        "empty    | [Trash]    Empty hidden trash bin"
+        "restore  | [Trash]    Restore files from trash"
+    )
+
+    local choice
+    choice=$(printf "%s\n" "${options[@]}" | fzf --prompt "Command> " --reverse --delimiter="|" --with-nth=2)
+    leave_alt_screen
+
+    [[ -z "$choice" ]] && exit 0
+    printf "" > "$IPRE_SELECT_FILE"
+
+    local cmd_id="${choice%% |*}"
+    cmd_id="${cmd_id// /}"
+    case "$cmd_id" in
+        chmod)    ipre_palette_do_chmod     "$@" ;;
+        open)     ipre_palette_do_open      "$@" ;;
+        shell)    ipre_palette_do_shell_cmd "$@" ;;
+        compress) ipre_palette_do_compress  "$@" ;;
+        extract)  ipre_palette_do_extract   "$@" ;;
+        gitadd)   ipre_palette_do_git_add   "$@" ;;
+        checksum) ipre_palette_do_checksum  "$@" ;;
+        empty)    ipre_palette_do_trash_empty    ;;
+        restore)  ipre_palette_do_trash_restore  ;;
+        *)        print_warn "Unknown command ID: $cmd_id"; sleep 1 ;;
+    esac
+}
