@@ -6,6 +6,7 @@ Basic Example:
 Advanced Example:
 ![](./ipre_example_advanced.gif)
 
+NOTE: these GIFs might be out of date.
 
 ## Dependency
 The following programs are required by the `pre` command:
@@ -13,8 +14,8 @@ The following programs are required by the `pre` command:
 1. `chafa`    - print image in terminal(the kernel)
 2. `eza`      - preview directory
 3. `bat`      - preview text/source files
-4. `pdftoppm` - preview pdf files
-5. `ddjvu`    - preview djvu files
+4. `pdftoppm` - preview pdf files(`pdfinfo` for page counting)
+5. `ddjvu`    - preview djvu files(`djvused` for page counting)
 6. `magick`   - preview fonts
 7. `ffmpegthumbnailer`      - preview videos
 8. `archivemount/fuse-zip`  - preview tar(.gz) or zip files
@@ -48,7 +49,7 @@ Configure this program by environment variables.
 * set `FONT_TEXT` to change the sample text in font-preview.
 
 ## play with shell
-Add the scripts - `pre`, `ipre` and `ipre_backend` to your PATH, and then add the following config to your `.zshrc`:
+Add the scripts - `pre`, `ipre`, `ipre_backend` and `ipre_palette` to your PATH, and then add the following config to your `.zshrc`:
 
 ```shell
 # inline (file) preview in shell
@@ -59,11 +60,10 @@ function ipre() {
     [ -n "$cwd" ] && [ "$cwd" != "$PWD" ] && builtin cd -- "$cwd"
     rm -f -- "$tmp"
 }
-
-# NOTE: function 'yy' do NOT support infinite depth
+# function 'yy' do NOT support '--no-leave' argument
 function yy() {
     local tmp="$(mktemp -t "ipre-cwd.XXXXXX")" cwd
-    command ipre "$@" --cwd-file="$tmp" --max-depth 1
+    command ipre "$@" --cwd-file="$tmp" --depth 1
     cwd="$(cat -- "$tmp" 2>/dev/null)"
     [ -n "$cwd" ] && [ "$cwd" != "$PWD" ] && builtin cd -- "$cwd"
     rm -f -- "$tmp"
@@ -98,28 +98,33 @@ Keybinds:
 
 ```txt
 === ipre Keybindings ===
+  Ctrl+q             : Exit ipre
+  Alt+q              : Exit and CD to current viewed dir
   Enter              : Open file/directory
-  Left/Right         : Navigate parent/child directories
+  [Left/Right]       : Navigate parent/child directories
+  Ctrl+[f/b]         : Preview window Scroll up/down
   `(Backtick)        : Toggle File/Directory/All view
   Alt+p              : Toggle preview window
   Alt+.              : Toggle hidden files
-  Alt+0~9            : Set search depth (0 for infinite)
-  Alt+-/=            : Decrease/Increase search depth
+  Alt+[0~9]          : Set search depth (0 for infinite)
+  Alt+[-/=]          : Decrease/Increase search depth
   Alt+o              : Cycle sort mode (name/time/size/ext)
   Alt+g              : Live Grep (Search file content)
   Alt+a              : Toggle selection (Invert)
   Alt+y              : Copy path(s) to clipboard
-  Alt+c/x/v          : Copy/Cut/Paste files
-  Alt+i              : Inspect ipre clipboard
-  Alt+w              : Clear ipre clipboard
-  Alt+r              : Rename selected item(s)
-  Alt+e              : Wdired batch rename
+  Alt+[c/x/v]        : Copy/Cut/Paste files
+  Alt+i              : Inspect ipre select|clip system
+  Alt+s              : Cross-directory multi-selection
+  Alt+r              : Rename selected item(s)|Use Ripgrep in live grep
+  Alt+f              : Use Fuzzy in live grep
+  Alt+w              : Wdired batch rename(UNSAFE)
   Alt+n              : Create new file/directory
   Alt+d              : Delete selected
-  Alt+s              : Bookmark selected items
+  Alt+m              : Bookmark selected items
   Alt+b              : Open bookmarks menu
   Alt+?              : Show this help
-  Alt+q              : Exit and CD to current viewed dir
+  Alt+t              : To directory by Zoxide
+  Alt+Space          : Open command pallete
 ```
 
 
