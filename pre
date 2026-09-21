@@ -188,7 +188,7 @@ img_preview_fix() {
         if [[ -f "$img" ]]; then
             # NOTE: this command tests the image AND prints it
             if ! chafa --format=sixel --size=$view_size --animate=off "$img"; then
-                rm -f "$img"
+                rm -f -- "$img"
                 "$gen_cmd" "$file" "$img"
             else
                 success=1

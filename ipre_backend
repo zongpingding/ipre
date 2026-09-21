@@ -398,7 +398,7 @@ ipre_action_refresh_and_focus() {
     fi
 
     local focus_target="$(<"$IPRE_RAM_FOCUS_FILE")"
-    rm -f "$IPRE_RAM_FOCUS_FILE"
+    rm -f -- "$IPRE_RAM_FOCUS_FILE"
     if [[ -z "$focus_target" ]]; then
         echo "reload(\"$IPRE_BACKEND_CMD\" ipre_action_run)"
         exit 0
@@ -523,7 +523,7 @@ EOF2
                 *)  mkdir -p "${name:h}"; touch "$name" ;;
             esac
         done
-        rm -f "$tmpfile"
+        rm -f -- "$tmpfile"
     else
         name_array=("${(@s/,/)names}")
         for name in "${name_array[@]}"; do
@@ -789,7 +789,7 @@ EOF
             echo "${final_news[$i]:t}" > "$IPRE_RAM_FOCUS_FILE"
         fi
     done
-    rm -f "$tmpfile"
+    rm -f -- "$tmpfile"
     if [[ ${#errors[@]} -gt 0 ]]; then
         {
             enter_alt_screen
@@ -1029,7 +1029,7 @@ EOF
                     printf "" > "$IPRE_SELECT_FILE"
                 fi
 
-                rm -f "$tmpfile"
+                rm -f -- "$tmpfile"
 
                 if [[ ${#errors[@]} -gt 0 ]]; then
                     {
@@ -1206,7 +1206,7 @@ ipre_action_zoxide() {
         echo 'all' > "$IPRE_STATE_FILE"
         printf "" > "$IPRE_TARGETS_FILE"
         # Explicitly clear RAM focus to avoid jumping to a non-existent file in the new directory
-        rm -f "$IPRE_RAM_FOCUS_FILE"
+        rm -f -- "$IPRE_RAM_FOCUS_FILE"
     fi
 }
 

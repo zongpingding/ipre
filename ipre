@@ -112,13 +112,13 @@ export IPRE_PAGE_MAX_FILE="$IPRE_RAM_DIR/preview_page_max_cached"
 # Ensure RAM cleanup securely
 cleanup() {
     if [[ -n "$IPRE_RAM_DIR" && -d "$IPRE_RAM_DIR" && "$IPRE_RAM_DIR" == *"ipre"* ]]; then
-        rm -rf "$IPRE_RAM_DIR"
+        rm -rf -- "$IPRE_RAM_DIR"
     fi
 }
 trap cleanup EXIT
 
 # Initialize states
-rm -f "$IPRE_FORCE_CD_FILE"
+rm -f -- "$IPRE_FORCE_CD_FILE"
 if [[ ${#target_dirs[@]} -eq 1 ]]; then
     start_dir="${target_dirs[1]}"
     printf "" > "$IPRE_TARGETS_FILE"
@@ -241,7 +241,7 @@ selected_items=("${(@f)$(
 
 # setup final CWD for directory changing 
 if [[ -f "$IPRE_FORCE_CD_FILE" ]]; then
-    rm -f "$IPRE_FORCE_CD_FILE"
+    rm -f -- "$IPRE_FORCE_CD_FILE"
     if [[ -n "$cwd_file" ]]; then
         printf "%s" "$(<"$IPRE_CWD_FILE")" > "$cwd_file"
     fi

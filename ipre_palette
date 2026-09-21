@@ -193,7 +193,7 @@ ipre_palette_do_git_add() {
 
 ipre_palette_do_trash_empty() {
     if [[ -n "$IPRE_TRASH_DIR" && -d "$IPRE_TRASH_DIR" ]]; then
-        rm -rf "$IPRE_TRASH_DIR"
+        rm -rf -- "$IPRE_TRASH_DIR"
         mkdir -p "$IPRE_TRASH_DIR"
         clear
         printf "%bTrash bin emptied.%b\n" "$C_GRN" "$C_RST"
@@ -232,7 +232,7 @@ ipre_palette_do_trash_restore() {
 
     enter_alt_screen
     local selected
-    selected=$(printf "%s\n" "${fzf_input[@]}" | fzf --prompt "Restore> " --multi --reverse --delimiter=$'\t' --with-nth=1,2)
+    selected=$(printf "%s\n" "${fzf_input[@]}" | fzf --prompt "Restore > " --multi --reverse --delimiter=$'\t' --with-nth=1,2)
     leave_alt_screen
 
     [[ -z "$selected" ]] && return
@@ -292,7 +292,7 @@ ipre_action_command_palette() {
     )
 
     local choice
-    choice=$(printf "%s\n" "${options[@]}" | fzf --prompt "Command> " --reverse --delimiter="|" --with-nth=2)
+    choice=$(printf "%s\n" "${options[@]}" | fzf --prompt "Command > " --reverse --delimiter="|" --with-nth=2)
     leave_alt_screen
 
     [[ -z "$choice" ]] && exit 0
