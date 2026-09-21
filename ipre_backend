@@ -1210,6 +1210,17 @@ ipre_action_zoxide() {
     fi
 }
 
+# Global Search & Replace (via Neovim + grug-far.nvim)
+ipre_action_global_replace_rg() {
+    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    # Launch Neovim and automatically execute the :GrugFar command.
+    ${EDITOR:-nvim} -c "GrugFar"
+}
+ipre_action_global_replace_ast_rg() {
+    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    ${EDITOR:-nvim} -c "lua require('grug-far').open({ engine = 'astgrep' })"
+}
+
 ipre_action_help() {
     clear
     print_title "ipre Keybindings"
@@ -1217,7 +1228,7 @@ ipre_action_help() {
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+q"         "$C_RST" "Exit and CD to current viewed dir"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Enter"         "$C_RST" "Open file/directory"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "[Left/Right]"  "$C_RST" "Navigate parent/child directories"
-    printf "  %b%-18s%b : %s\n" "$C_YLW" "Ctrl+[f/b]"    "$C_RST" "Preview window Scroll up/down"
+    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+[f/b]"     "$C_RST" "Preview window Scroll up/down"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "\`(Backtick)"  "$C_RST" "Toggle File/Directory/All view"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+p"         "$C_RST" "Toggle preview window"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+."         "$C_RST" "Toggle hidden files"
@@ -1230,13 +1241,15 @@ ipre_action_help() {
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+[c/x/v]"   "$C_RST" "Copy/Cut/Paste files"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+i"         "$C_RST" "Inspect ipre select|clip system"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+s"         "$C_RST" "Cross-directory multi-selection"
-    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+r"         "$C_RST" "Rename selected item(s)|Use Ripgrep in live grep"
-    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+f"         "$C_RST" "Use Fuzzy in live grep"
+    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+r"         "$C_RST" "Rename selected item(s) |Use Ripgrep in live grep"
+    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+f"         "$C_RST" "Preview window Scroll up|Use Fuzzy in live grep"
     printf "  %b%-18s%b : %s%b(%s)%b\n" "$C_YLW" "Alt+w" "$C_RST" "Wdired batch rename" "${C_RED}" "UNSAFE" "$C_RST"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+n"         "$C_RST" "Create new file/directory"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+d"         "$C_RST" "Delete selected"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+m"         "$C_RST" "Bookmark selected items"
-    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+b"         "$C_RST" "Open bookmarks menu"
+    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+/"         "$C_RST" "Open bookmarks menu"
+    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+;"         "$C_RST" "Global Search & Replace[rg](by nvim & grug-far.nvim)"
+    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+'"         "$C_RST" "Global Search & Replace[ast-rg](by nvim & grug-far.nvim)"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+?"         "$C_RST" "Show this help"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+t"         "$C_RST" "To directory by Zoxide"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+Space"     "$C_RST" "Open command pallete"

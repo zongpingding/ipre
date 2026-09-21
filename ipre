@@ -174,8 +174,8 @@ local -a fzf_binds=(
     "right:reload(\"$BACKEND_CMD\" ipre_action_right {})+clear-query"
 
     #####     Dynamic Smart Scroll (Page flip for PDF, Native scroll for Code)    #####
-    "ctrl-f:transform(\"$BACKEND_CMD\" ipre_action_smart_scroll down {})"
-    "ctrl-b:transform(\"$BACKEND_CMD\" ipre_action_smart_scroll up {})"
+    "alt-f:transform(\"$BACKEND_CMD\" ipre_action_smart_scroll down {})"
+    "alt-b:transform(\"$BACKEND_CMD\" ipre_action_smart_scroll up {})"
 
     #####     Modify entry: select|create|copy|cut|delete|rename etc     #####
     "alt-s:execute-silent(\"$BACKEND_CMD\" ipre_action_mark {+})+transform-border-label(\"$BACKEND_CMD\" ipre_action_border_status)+deselect-all"
@@ -194,8 +194,10 @@ local -a fzf_binds=(
 
     #####     ipre utils     #####
     "alt-?:execute(\"$BACKEND_CMD\" ipre_action_help)"
+    "alt-;:execute(\"$BACKEND_CMD\" ipre_action_global_replace_rg)+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
+    "alt-':execute(\"$BACKEND_CMD\" ipre_action_global_replace_ast_rg)+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
     "alt-m:execute-silent(\"$BACKEND_CMD\" ipre_action_bookmark {+})"
-    "alt-b:execute(\"$BACKEND_CMD\" ipre_action_open_bookmarks)+reload(\"$BACKEND_CMD\" ipre_action_run)+clear-query"
+    "alt-/:execute(\"$BACKEND_CMD\" ipre_action_open_bookmarks)+reload(\"$BACKEND_CMD\" ipre_action_run)+clear-query"
     "alt-g:execute(\"$BACKEND_CMD\" ipre_action_live_grep)+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
     "alt-t:execute(\"$BACKEND_CMD\" ipre_action_zoxide)+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
     "alt-space:execute(\"$BACKEND_CMD\" ipre_action_command_palette {+})+reload(\"$BACKEND_CMD\" ipre_action_run)"

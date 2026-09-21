@@ -1,12 +1,15 @@
 ## Examples
 
 Basic Example:
-![](./ipre_example_basic.gif)
+![](./examples/ipre_example_basic.gif)
 
 Advanced Example:
-![](./ipre_example_advanced.gif)
+![](./examples/ipre_example_advanced.gif)
 
 NOTE: these GIFs might be out of date.
+
+## WARN
+To use these scripts, you MUST use `zshell`.
 
 ## Dependency
 The following programs are required by the `pre` command:
@@ -21,13 +24,12 @@ The following programs are required by the `pre` command:
 8. `archivemount/fuse-zip`  - preview tar(.gz) or zip files
 9. `gnome-epub-thumbnailer` - preview EPub or MOBI books
 
-To make `chafa` work, your terminal must support the `sixel` protocol, and your shell must be `Zsh`.
-
+NOTE: For `chafa` to work, your terminal may need to support the `sixel` protocol.
 
 ## Usage
 Add this script to your `PATH`.
 
-## basic
+## Basic
 Provide a filename as an argument like this:
 ```shell
 # view page 1 in test.pdf
@@ -48,7 +50,7 @@ Configure this program by environment variables.
 * set `EZA_ARG` to change the default argument of `eza`;
 * set `FONT_TEXT` to change the sample text in font-preview.
 
-## play with shell
+## Play with (z)shell
 Add the scripts - `pre`, `ipre`, `ipre_backend` and `ipre_palette` to your PATH, and then add the following config to your `.zshrc`:
 
 ```shell
@@ -60,7 +62,7 @@ function ipre() {
     [ -n "$cwd" ] && [ "$cwd" != "$PWD" ] && builtin cd -- "$cwd"
     rm -f -- "$tmp"
 }
-# function 'yy' do NOT support '--no-leave' argument
+# '--no-leave' argument will break directory changing of RET.
 function yy() {
     local tmp="$(mktemp -t "ipre-cwd.XXXXXX")" cwd
     command ipre "$@" --cwd-file="$tmp" --depth 1
@@ -80,7 +82,8 @@ This function depends on the following stuff:
 6. `wl-copy`  - clipboard support
 7. `awk/sed/grep` - as it is
 8. `tr/cut/wc/head/tail` - as it is
-9. zshell / bash builtin
+9. `ripgrep/ast-grep` - better grep
+10. zshell / bash builtin
 
 Using examples:
 
@@ -102,7 +105,7 @@ Keybinds:
   Alt+q              : Exit and CD to current viewed dir
   Enter              : Open file/directory
   [Left/Right]       : Navigate parent/child directories
-  Ctrl+[f/b]         : Preview window Scroll up/down
+  Alt+[f/b]          : Preview window Scroll up/down
   `(Backtick)        : Toggle File/Directory/All view
   Alt+p              : Toggle preview window
   Alt+.              : Toggle hidden files
@@ -115,18 +118,19 @@ Keybinds:
   Alt+[c/x/v]        : Copy/Cut/Paste files
   Alt+i              : Inspect ipre select|clip system
   Alt+s              : Cross-directory multi-selection
-  Alt+r              : Rename selected item(s)|Use Ripgrep in live grep
-  Alt+f              : Use Fuzzy in live grep
+  Alt+r              : Rename selected item(s) |Use Ripgrep in live grep
+  Alt+f              : Preview window Scroll up|Use Fuzzy in live grep
   Alt+w              : Wdired batch rename(UNSAFE)
   Alt+n              : Create new file/directory
   Alt+d              : Delete selected
   Alt+m              : Bookmark selected items
-  Alt+b              : Open bookmarks menu
+  Alt+/              : Open bookmarks menu
+  Alt+;              : Global Search & Replace[rg](by nvim & grug-far.nvim)
+  Alt+'              : Global Search & Replace[ast-rg](by nvim & grug-far.nvim)
   Alt+?              : Show this help
   Alt+t              : To directory by Zoxide
   Alt+Space          : Open command pallete
 ```
-
 
 Notes:
 
@@ -134,6 +138,7 @@ Notes:
 * set `EDITOR` to change the default text file opener command;
 * you may need to replace `wl-copy` with your own clipboard program;
 * to use `live grep`(alt-g), you need to install `ripgrep`.
+* to use `global search & replace`(alt-;/'), you need to install `ripgrep` and `ast-grep`.
 
 ## WARNING
 
