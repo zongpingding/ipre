@@ -20,6 +20,7 @@ if [[ -n "$IPRE_FD" ]]; then
 else
     cmd=(
         fd --follow
+	-I # do NOT follow .gitignore etc
         -E .git -E target -E .cargo -E build -E .npm -E node_modules
         -E .cache -E dist -E out -E lsp-bridge
         -E .java -E .gradle -E .nuget -E .steam -E .android
