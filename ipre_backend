@@ -1066,6 +1066,20 @@ EOF
     done
 }
 
+#####     yank path     #####
+ipre_action_yank_path() {
+    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    local item
+    local -a paths=()
+    for item in "$@"; do
+        # Safely strip Nerd Font icon and leading space if icons are enabled
+        [[ "$IPRE_ICONS" == "1" ]] && item="${item#* }"
+        paths+=("$(realpath -s -- "$item")")
+    done
+    if [[ ${#paths[@]} -gt 0 ]]; then
+        printf "%s\n" "${paths[@]}" | ${CLIPBOARD:-wl-copy}
+    fi
+}
 
 #####     ipre bookmark     #####
 ipre_action_bookmark() {

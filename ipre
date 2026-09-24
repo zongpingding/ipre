@@ -190,7 +190,7 @@ local -a fzf_binds=(
 
     #####     selection & clip system management     #####
     "alt-a:toggle-all"
-    "alt-y:execute-silent(cd \"\$(cat '$IPRE_CWD_FILE')\" && realpath -s {+} | wl-copy)+deselect-all"
+    "alt-y:execute-silent(\"$BACKEND_CMD\" ipre_action_yank_path {+})+deselect-all"
     "alt-i:execute(\"$BACKEND_CMD\" ipre_action_show_buffers)+reload(\"$BACKEND_CMD\" ipre_action_run)+transform-border-label(\"$BACKEND_CMD\" ipre_action_border_status)+clear-query"
 
     #####     ipre utils     #####
