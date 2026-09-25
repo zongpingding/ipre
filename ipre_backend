@@ -296,7 +296,11 @@ ipre_action_change_page() {
 ipre_action_preview_with_page() {
     printf '\033[2J\033[H'
     local target="$1"
-    [[ "$IPRE_ICONS" == "1" ]] && target="${target#* }" 
+    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    if [[ "$IPRE_ICONS" == "1" ]]; then
+        local stripped="${target#* }"
+        [[ ! -e "$target" && ! -L "$target" ]] && target="$stripped"
+    fi
     local file="$target"
     local page=1
     local last_file_name=""
@@ -1072,8 +1076,10 @@ ipre_action_yank_path() {
     local item
     local -a paths=()
     for item in "$@"; do
-        # Safely strip Nerd Font icon and leading space if icons are enabled
-        [[ "$IPRE_ICONS" == "1" ]] && item="${item#* }"
+        if [[ "$IPRE_ICONS" == "1" ]]; then
+            local stripped="${item#* }"
+            [[ ! -e "$item" && ! -L "$item" ]] && item="$stripped"
+        fi
         paths+=("$(realpath -s -- "$item")")
     done
     if [[ ${#paths[@]} -gt 0 ]]; then

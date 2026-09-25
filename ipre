@@ -257,8 +257,12 @@ fi
 # NOTE: Strip icon and leading space if icons are enabled
 local -a abs_items
 local final_cwd="$(<"$IPRE_CWD_FILE")"
+cd "$final_cwd" || exit 0
 for item in "${selected_items[@]}"; do
-    [[ $IPRE_ICONS -eq 1 ]] && item="${item#* }"
+    if [[ "$IPRE_ICONS" == "1" ]]; then
+        local stripped="${item#* }"
+        [[ ! -e "$item" && ! -L "$item" ]] && item="$stripped"
+    fi
 
     if [[ "$item" == /* ]]; then
         abs_items+=("$item")
