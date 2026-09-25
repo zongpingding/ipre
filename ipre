@@ -21,11 +21,10 @@ else
     cmd=(
         fd --follow
 	-I # do NOT follow .gitignore etc
-        -E .git -E target -E .cargo -E build -E .npm -E node_modules
-        -E .cache -E dist -E out -E lsp-bridge
-        -E .java -E .gradle -E .nuget -E .steam -E .android
-        -E .ipython -E .vscode -E .vscode-oss -E .oh-my-zsh
-        -E .emacs-tmp -E .pub-cache -E .proxyman
+        # -E .git -E .cargo -E .npm -E .cache
+        # -E .java -E .gradle -E .nuget -E .steam -E .android
+        # -E .ipython -E .vscode -E .vscode-oss -E .oh-my-zsh
+        # -E .emacs-tmp -E .pub-cache -E .proxyman
         . # search all patterns
     )
 fi

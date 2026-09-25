@@ -137,9 +137,14 @@ Notes:
 * set `IPRE_FD` to change the default search method;
 * set `EDITOR` to change the default text file opener command;
 * set `CLIPBOARD` to change the default clipboard program;
-* you may need to replace `wl-copy` with your own clipboard program;
-* to use `live grep`(alt-g), you need to install `ripgrep`.
-* to use `global search & replace`(alt-;/'), you need to install `ripgrep` and `ast-grep`.
+* to use `live grep`(`alt-g`), you need to install `ripgrep`.
+* to use `global search & replace`(`alt-;` or `alt-'`), you need to install `ripgrep` and `ast-grep`.
+
+For example, add `.git` filter to `IPRE_FD`:
+
+```shell
+export IPRE_FD='fd --follow -I . -E .git'
+```
 
 ## WARNING
 
