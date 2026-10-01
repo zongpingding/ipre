@@ -1,0 +1,59 @@
+# Regression tests
+
+Run the complete check from any directory:
+
+```sh
+python3 /path/to/ipre/tests/run.py
+```
+
+From the repository root:
+
+```sh
+python3 tests/run.py
+python3 tests/run.py -k cache
+python3 tests/run.py -p test_palette.py
+```
+
+The runner checks dependencies and all five zsh scripts' syntax before running
+the tests. It exits nonzero on a syntax error, missing dependency or test failure.
+Standard discovery also works: `python3 -m unittest discover -s tests -v`.
+
+## Environment
+
+Use Linux, Python 3 and zsh, with bash, fd, fzf, ripgrep, file and GNU coreutils
+installed. No Python packages, editor, graphical display or PDF renderer are
+required. Run as a regular user: tests of directory write permissions are skipped
+as root. Some tests require a working PTY; run outside containers that prohibit
+PTY creation. Individual suites may skip tests when fd/fzf/rg are unavailable;
+the full runner requires these tools. Check the summary for skipped tests.
+
+Each test uses a temporary directory for data, XDG locations and session state.
+Inherited `IPRE_*` and `FZF_*` settings are excluded. Tests do not change `HOME`
+or use the user's files, bookmarks or trash. PTY tests answer terminal cursor
+queries and send keyboard input automatically. Files in `ipre_live_test/` are
+manual fixtures and are neither used nor removed by this suite.
+
+## Coverage
+
+| Suite | Checks |
+| --- | --- |
+| `test_browser.py` | Listing, navigation, depth parsing, frontend selection, real fzf keys/reload |
+| `test_sessions.py` | Two simultaneous frontends, independent state, cleanup while the other stays open |
+| `test_paths.py` | Byte-preserving encoding, invalid input, stream boundaries |
+| `test_buffers.py` | Bookmarks, selection and buffer editing |
+| `test_rename.py` | Source identity, swaps, conflicts, staging and rollback |
+| `test_paste.py` | Copy/cut success, partial failure, retries, self/descendant guards |
+| `test_trash.py` | Collision-free deletion, original-path restoration, failure preservation, screen cleanup |
+| `test_preview.py` | Preview arguments, PDF/DjVu page limits, text scrolling and grep paths |
+| `test_cache.py` | Actual `pre` entry point, directory identity, cache reuse, timestamp precision and pages |
+| `test_palette.py` | Cancel/empty prompts, real Ctrl+C, execution modes and alternate-screen cleanup |
+
+The cache suite replaces PDF rendering and image display with deterministic
+commands while running `pre` itself. The concurrency test holds two real
+frontends open with a controlled fzf replacement; other tests exercise real fzf.
+Injected move/copy failures let tests verify that original data and retry state
+survive failures without relying on timing or hardware faults.
+
+When fixing a bug, add a regression to the relevant suite. Prefer observable
+files, state, command arguments and terminal output over assertions about source
+text. `support.py` contains fixtures and helpers only, with no tests of its own.

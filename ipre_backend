@@ -2,32 +2,62 @@
 
 setopt extended_glob
 
+source "${0:A:h}/ipre_paths"
 ACTION="$1"
-ITEM="$2"
-shift # Shift out the action, so "$@" contains the target files if any
+shift
+local protocol=raw
+if [[ "$1" == --encoded || "$1" == --records ]]; then
+    protocol="${1#--}"
+    shift
+elif [[ "$1" == -- ]]; then
+    shift
+fi
+if [[ "$protocol" != raw ]]; then
+    local -a decoded_args=()
+    local arg index=0
+    for arg in "$@"; do
+        (( ++index ))
+        if [[ ( "$ACTION" == ipre_action_smart_scroll && $index == 1 ) ||
+              ( "$ACTION" == ipre_action_rg_preview && $index == 2 ) ]]; then
+            decoded_args+=("$arg")
+        elif [[ -z "$arg" ]]; then
+            decoded_args+=("")
+        else
+            if [[ "$protocol" == records ]]; then
+                ipre_record_path "$arg"
+            else
+                ipre_saved_path_decode "$arg"
+            fi
+            if (( $? != 0 )) || [[ "$REPLY" != /* ]]; then
+                printf 'Invalid encoded path\n' >&2
+                exit 1
+            fi
+            decoded_args+=("$REPLY")
+        fi
+    done
+    set -- "${decoded_args[@]}"
+fi
+ITEM="$1"
+if ! ipre_state_read_path "$IPRE_CWD_FILE" || [[ "$REPLY" != /* ]]; then
+    printf 'Invalid current directory state\n' >&2
+    exit 1
+fi
+IPRE_CWD="$REPLY"
 
 
 # =========================================================
 # ipre_backend bootstrap
 # =========================================================
 
-# Global Icon Sanitization
-# NOTE: Strip the leading icon and space from all incoming targets
-if [[ "$IPRE_ICONS" == "1" ]]; then
-    ITEM="${ITEM#* }"
-    local -a clean_args=()
-    local arg
-    for arg in "$@"; do
-        clean_args+=("${arg#* }")
-    done
-    set -- "${clean_args[@]}" # Re-inject sanitized arguments back to $@
-fi
-
 # Clip & Select Buffer Merge
 if [[ "$ACTION" == "ipre_action_command_palette" ]]; then
     if [[ -s "$IPRE_SELECT_FILE" ]]; then
         local -a sel_args=("${(@f)$(<"$IPRE_SELECT_FILE")}")
-        set -- "$@" "${sel_args[@]}"
+        local value
+        for value in "${sel_args[@]}"; do
+            ipre_saved_path_decode "$value" || exit 1
+            set -- "$@" "$REPLY"
+        done
         local -A seen_args
         local -a final_args=()
         for arg in "$@"; do
@@ -53,8 +83,8 @@ readonly C_MAG='\033[1;35m'
 
 print_title()  { printf "%b=== %s ===%b\n" "$C_CYN" "$1" "$C_RST"; }
 print_warn()   { printf "%b=== %s ===%b\n\n" "$C_RED" "$1" "$C_RST"; }
-print_label()  { printf "%b%s%b" "$C_GRN" "$1" "$C_RST"; }
-print_hl()     { printf "%b%s%b" "$C_YLW" "$1" "$C_RST"; }
+print_label()  { ipre_text_escape "$1"; printf "%b%s%b" "$C_GRN" "$REPLY" "$C_RST"; }
+print_hl()     { ipre_text_escape "$1"; printf "%b%s%b" "$C_YLW" "$REPLY" "$C_RST"; }
 print_clip()   { printf "[%b%s: %d%b] " "$C_MAG" "$1" "$2" "$C_RST"; }
 
 # alternate screen
@@ -84,9 +114,10 @@ ipre_action_border_status() {
     if [[ -n "$targets" ]]; then
         cwd="[Multiple Directories]"
     else
-        cwd="$(<"$IPRE_CWD_FILE")"
+        cwd="$IPRE_CWD"
         cwd="${cwd/#$HOME/~}"
     fi
+    ipre_text_escape "$cwd"; cwd="$REPLY"
     local entry_mode_cwd="$(printf '[%b%s%b:%s]' "$C_CYN" "$state" "$C_RST" "$cwd")"
 
     # clip|select status
@@ -120,9 +151,9 @@ ipre_action_border_status() {
 
     # git status
     git_str=""
-    if git -C "$(<"$IPRE_CWD_FILE")" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        local branch="$(git -C "$(<"$IPRE_CWD_FILE")" branch --show-current 2>/dev/null)"
-        local changes="$(git -C "$(<"$IPRE_CWD_FILE")" status --porcelain 2>/dev/null | wc -l)"
+    if git -C "$IPRE_CWD" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        local branch="$(git -C "$IPRE_CWD" branch --show-current 2>/dev/null)"
+        local changes="$(git -C "$IPRE_CWD" status --porcelain 2>/dev/null | wc -l)"
         if [[ "$changes" -gt 0 ]]; then
             git_str="$(printf '[%bGit:%s *%d%b]' "$C_MAG" "$branch" "$changes" "$C_RST")"
         else
@@ -141,112 +172,92 @@ ipre_action_border_status() {
 }
 
 ipre_action_header_info() {
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
-    local info
+    cd "$IPRE_CWD" || exit 0
+    local info description
     if [[ -n "$ITEM" && -f "$ITEM" ]]; then
-        local du_out="$(du -sh "$ITEM" 2>/dev/null)"
+        local du_out="$(du -sh -- "$ITEM" 2>/dev/null)"
         local size="${du_out%%[[:space:]]*}"
-        info="$(printf '[%b%s%b]: %s' "$C_YLW" "$size" "$C_RST" "$(file --brief "$ITEM" 2>/dev/null)")"
+        description="$(file --brief -- "$ITEM" 2>/dev/null)"
+        ipre_text_escape "$description"
+        info="$(printf '[%b%s%b]: %s' "$C_YLW" "$size" "$C_RST" "$REPLY")"
     elif [[ -n "$ITEM" ]]; then
-        info="$(file --brief "$ITEM" 2>/dev/null || echo 'No file')"
+        info="$(file --brief -- "$ITEM" 2>/dev/null || echo 'No file')"
+        ipre_text_escape "$info"; info="$REPLY"
     else
         info="Empty directory / No matches"
     fi
-    printf '%s\n' "$info"
+    local notice=""
+    [[ -n "$IPRE_NOTICE_FILE" && -s "$IPRE_NOTICE_FILE" ]] && notice="$(<"$IPRE_NOTICE_FILE")"
+    if [[ -n "$notice" ]]; then
+        printf '%b%s%b | %s\n' "$C_RED" "$notice" "$C_RST" "$info"
+    else
+        printf '%s\n' "$info"
+    fi
 }
 
 
 #####     list entry(kernel)     #####
-ipre_action_run_eza() {
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
-    local run_cmd="$IPRE_FD_CMD_STR"
-    local targets="$(<"$IPRE_TARGETS_FILE")"
-    if [[ "$(<"$IPRE_HIDDEN_FILE")" == "true" ]]; then
-        run_cmd="$run_cmd --hidden"
-    fi
-    local depth="$(<"$IPRE_RAM_DEPTH_FILE" 2>/dev/null)"
-    if [[ -n "$depth" && "$depth" -gt 0 ]]; then
-        run_cmd="$run_cmd --maxdepth $depth"
-    fi
-
-    # sort command
-    local sort_mode="$(<"$IPRE_SORT_FILE" 2>/dev/null)"
-    local eza_opts="-1d --color=never --no-quotes"
-    [[ "$IPRE_ICONS" == "1" ]] && eza_opts+=" --icons=always"
-    case "$sort_mode" in
-        time) eza_opts+=" --sort=modified --reverse" ;; # Newest first
-        size) eza_opts+=" --sort=size --reverse" ;;     # Largest first
-        ext)  eza_opts+=" --sort=extension" ;;          # By extension
-        *)    eza_opts+=" --sort=name" ;;               # Case-insensitive natural sort
+# fd supplies lossless paths. Presentation is built separately from those paths.
+ipre_listing_records() {
+    cd -- "$IPRE_CWD" || return 1
+    local run_cmd="$IPRE_FD_CMD_STR --print0 --color=never"
+    local state="$(<"$IPRE_STATE_FILE")" depth="$(<"$IPRE_RAM_DEPTH_FILE")"
+    local sort_mode="$(<"$IPRE_SORT_FILE")" value quoted record label priority key IPRE_INPUT_BUFFER=""
+    local -a targets=("${(@f)$(<"$IPRE_TARGETS_FILE")}") sort_args=()
+    [[ "$(<"$IPRE_HIDDEN_FILE")" == true ]] && run_cmd+=' --hidden'
+    [[ "$depth" == <-> && "$depth" -gt 0 ]] && run_cmd+=" --max-depth $depth"
+    case "$state" in
+        directory) run_cmd+=' --type d' ;;
+        file) run_cmd+=' --type f --type l' ;;
+        *) run_cmd+=' --type d --type f --type l' ;;
     esac
-
-    # fd filter
-    # NOTE: call different process according to entry mode('all', 'file' or 'directory')
-    local state="$(<"$IPRE_STATE_FILE")"
-    run_fd_eza_stream() {
-        local type_flag="$1"
-        local append_slash="$2"
-        local full_cmd="$run_cmd --type $type_flag $targets -X eza $=eza_opts"
-        # NOTE: "sed 's/ -> .*//'" to remove soft link target
-        if [[ "$append_slash" == "true" ]]; then
-            eval "$full_cmd" 2>/dev/null | sed 's/ -> .*//' | sed 's|^\./||; s|^\([^ ]* \)\./|\1|; s|/\?$|/|'
-        else
-            eval "$full_cmd" 2>/dev/null | sed 's/ -> .*//' | sed 's|^\./||; s|^\([^ ]* \)\./|\1|'
-        fi
-    }
-    if [[ "$state" == "directory" ]]; then
-        run_fd_eza_stream "d" "true" || true
-    elif [[ "$state" == "file" ]]; then
-        run_fd_eza_stream "f" "false" || true
-    else
-        run_fd_eza_stream "d" "true" || true
-        run_fd_eza_stream "f" "false" || true
-    fi
-}
-ipre_action_run_ls() {
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
-    local run_cmd="$IPRE_FD_CMD_STR"
-    local targets="$(<"$IPRE_TARGETS_FILE")"
-    if [[ "$(<"$IPRE_HIDDEN_FILE")" == "true" ]]; then
-        run_cmd="$run_cmd --hidden"
-    fi
-    local depth="$(<"$IPRE_RAM_DEPTH_FILE" 2>/dev/null)"
-    if [[ -n "$depth" && "$depth" -gt 0 ]]; then
-        run_cmd="$run_cmd --maxdepth $depth"
+    for value in "${targets[@]}"; do
+        [[ -z "$value" ]] && continue
+        ipre_saved_path_decode "$value" || return 1
+        printf -v quoted '%q' "$REPLY"
+        run_cmd+=" $quoted"
+    done
+    if [[ "$depth" == 0 ]]; then
+        eval "$run_cmd" 2>/dev/null | while ipre_stream_read $'\0'; do
+            value="$REPLY"
+            [[ "$state" == file && -d "$value" ]] && continue
+            ipre_emit_record "$value"
+        done
+        return 0
     fi
 
-    # fd filter
-    local state="$(<"$IPRE_STATE_FILE")"
-    if [[ "$state" == "directory" ]]; then
-        run_cmd="$run_cmd --type d"
-    elif [[ "$state" == "file" ]]; then
-        run_cmd="$run_cmd --type f"
-    fi
-
-    # sort command
-    run_cmd="$run_cmd $targets"
-    local sort_mode="$(<"$IPRE_SORT_FILE" 2>/dev/null)"
-    local sort_cmd="-X ls -1dp --group-directories-first"
+    zmodload zsh/stat || return 1
+    local -A attrs=()
     case "$sort_mode" in
-        time) sort_cmd+=" -t" ;;
-        size) sort_cmd+=" -S" ;;
-        ext)  sort_cmd+=" -X" ;; # '-X' must be the last
-        *)    sort_cmd+=" -v" ;;
+        time|size) sort_args=(-t $'\t' -k1,1n -k2,2nr -k3,3fV) ;;
+        *) sort_args=(-t $'\t' -k1,1n -k2,2fV -k3,3fV) ;;
     esac
-    run_cmd="$run_cmd $sort_cmd"
-    if [[ "$IPRE_ICONS" == "1" ]]; then
-        # inject 'd' for directory, '-' for file
-        eval "$run_cmd" 2>/dev/null | sed 's|^\./||; /\/$/ s|^|d |; /\/$/! s|^|- |' || true
-    else
-        eval "$run_cmd" 2>/dev/null | sed 's|^\./||' || true
-    fi
+    eval "$run_cmd" 2>/dev/null | {
+        while ipre_stream_read $'\0'; do
+            value="$REPLY"
+            value="${value:a}"
+            [[ "$state" == file && -d "$value" ]] && continue
+            [[ -d "$value" ]] && priority=0 || priority=1
+            ipre_display_path "$value"
+            label="$REPLY"
+            case "$sort_mode" in
+                time|size)
+                    attrs=()
+                    zstat -H attrs -- "$value" 2>/dev/null
+                    [[ "$sort_mode" == time ]] && key="${attrs[mtime]:-0}" || key="${attrs[size]:-0}"
+                    ;;
+                ext) ipre_text_escape "${value:l:e}"; key="$REPLY" ;;
+                *) key="$label" ;;
+            esac
+            printf '%s\t%s\t%s\t' "$priority" "$key" "$label"
+            ipre_emit_record "$value"
+        done
+    } | LC_ALL=C sort "${sort_args[@]}" | cut -f4-
 }
+
 ipre_action_run() {
-    if [[ "$IPRE_USE_LS" == "1" ]]; then
-        ipre_action_run_ls
-    else
-        ipre_action_run_eza
-    fi
+    # Keep the exact records for focus lookup, including during streaming reloads.
+    ipre_listing_records | tee "$IPRE_RAM_LIST_FILE"
 }
 
 
@@ -267,12 +278,12 @@ ipre_action_change_page() {
 
     # Cache page_max
     local page_max=""
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    cd "$IPRE_CWD" || exit 0
     if [[ -s "$IPRE_PAGE_MAX_FILE" ]]; then
         page_max=$(<"$IPRE_PAGE_MAX_FILE")
     else
         local file=""
-        [[ -f "$IPRE_LAST_FILE" ]] && file="$(<"$IPRE_LAST_FILE")"
+        ipre_state_read_path "$IPRE_LAST_FILE" && file="$REPLY"
         if [[ -n "$file" && -f "$file" ]]; then
             local ext="${file:l:e}"
             local file_type
@@ -296,25 +307,21 @@ ipre_action_change_page() {
 ipre_action_preview_with_page() {
     printf '\033[2J\033[H'
     local target="$1"
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
-    if [[ "$IPRE_ICONS" == "1" ]]; then
-        local stripped="${target#* }"
-        [[ ! -e "$target" && ! -L "$target" ]] && target="$stripped"
-    fi
-    local file="$target"
+    cd "$IPRE_CWD" || exit 0
+    local file="${target:a}"
     local page=1
     local last_file_name=""
-    [[ -f "$IPRE_LAST_FILE" ]] && last_file_name=$(<"$IPRE_LAST_FILE")
+    ipre_state_read_path "$IPRE_LAST_FILE" && last_file_name="$REPLY"
 
     if [[ "$file" != "$last_file_name" ]]; then
         echo 1 > "$IPRE_PAGE_FILE"
         printf "" > "$IPRE_PAGE_MAX_FILE"
-        echo "$file" > "$IPRE_LAST_FILE"
+        ipre_state_write_path "$IPRE_LAST_FILE" "$file"
         page=1
     else
         [[ -f "$IPRE_PAGE_FILE" ]] && page=$(<"$IPRE_PAGE_FILE")
     fi
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    cd "$IPRE_CWD" || exit 0
     pre "$file" "PAGE:$page" 2>/dev/null
 }
 
@@ -322,8 +329,7 @@ ipre_action_preview_with_page() {
 ipre_action_smart_scroll() {
     local dir="$1"
     local target="$2"
-    [[ "$IPRE_ICONS" == "1" ]] && target="${target#* }"
-    local file="$target"
+    local file="${target:a}"
     local ext="${file:l:e}"
     local file_type
     file_type=$(pre get_file_type "$file" "$ext" 2>/dev/null)
@@ -394,105 +400,92 @@ ipre_action_hidden() {
 
 
 #####     Entry list navigation     #####
+ipre_focus_line() {
+    local target="$(<"$IPRE_RAM_FOCUS_FILE")" line key number=0
+    REPLY=""
+    while IFS= read -r line; do
+        (( ++number ))
+        key="${line%%$'\t'*}"
+        if [[ "$key" == "$target" ]]; then
+            REPLY="$number"
+            return 0
+        fi
+    done < "$IPRE_RAM_LIST_FILE"
+    return 1
+}
+
+ipre_action_focus_position() {
+    if [[ -s "$IPRE_RAM_POS_FILE" ]]; then
+        printf 'pos(%s)\n' "$(<"$IPRE_RAM_POS_FILE")"
+        : > "$IPRE_RAM_POS_FILE"
+    elif [[ -s "$IPRE_RAM_FOCUS_FILE" ]] && ipre_focus_line; then
+        printf 'pos(%s)\n' "$REPLY"
+        rm -f -- "$IPRE_RAM_FOCUS_FILE"
+    fi
+    return 0
+}
+
 ipre_action_refresh_and_focus() {
-    if [[ ! -f "$IPRE_RAM_FOCUS_FILE" ]]; then
-        # Use explicitly exported backend cmd to survive subshell context loss
-        echo "reload(\"$IPRE_BACKEND_CMD\" ipre_action_run)"
-        exit 0
+    if [[ ! -s "$IPRE_RAM_FOCUS_FILE" ]]; then
+        printf 'reload(%q ipre_action_run)\n' "$IPRE_BACKEND_CMD"
+        return 0
+    elif [[ "$(<"$IPRE_RAM_DEPTH_FILE")" == 0 ]]; then
+        printf 'reload(%q ipre_action_run)+clear-query\n' "$IPRE_BACKEND_CMD"
+        return 0
     fi
-
-    local focus_target="$(<"$IPRE_RAM_FOCUS_FILE")"
-    rm -f -- "$IPRE_RAM_FOCUS_FILE"
-    if [[ -z "$focus_target" ]]; then
-        echo "reload(\"$IPRE_BACKEND_CMD\" ipre_action_run)"
-        exit 0
+    ipre_action_run >/dev/null
+    if ipre_focus_line; then
+        printf '%s\n' "$REPLY" > "$IPRE_RAM_POS_FILE"
+        rm -f -- "$IPRE_RAM_FOCUS_FILE"
     fi
-
-    ipre_action_run > "$IPRE_RAM_LIST_FILE" 2>/dev/null
-    local line_num="$(awk -v ic="$IPRE_ICONS" -v t="$focus_target" '{
-        str = $0;
-        if(ic == "1") sub(/^[^ ]+ /, "", str);
-        if(str == t || str == t"/") {print NR; exit}
-    }' "$IPRE_RAM_LIST_FILE")"
-    if [[ -n "$line_num" ]]; then
-        echo "$line_num" > "$IPRE_RAM_POS_FILE"
-    fi
-    echo "reload-sync(cat '$IPRE_RAM_LIST_FILE')+clear-query"
+    printf 'reload-sync(cat %q)+clear-query\n' "$IPRE_RAM_LIST_FILE"
 }
 
 ipre_action_left() {
-    local cur="$(<"$IPRE_CWD_FILE")"
-    local parent="${cur:h}"
-    [[ -z "$parent" ]] && parent="/"
-
-    if [[ "$cur" == "$parent" ]]; then
-        echo "reload(\"$IPRE_BACKEND_CMD\" ipre_action_run)+clear-query"
-        exit 0
+    local cur="$IPRE_CWD" parent="${IPRE_CWD:h}"
+    [[ -z "$parent" ]] && parent=/
+    if [[ "$cur" != "$parent" ]]; then
+        ipre_set_cwd "$parent"
+        ipre_set_focus "$cur"
     fi
-
-    local target_name="${cur:t}"
-    echo "$parent" > "$IPRE_CWD_FILE"
-    echo 'all' > "$IPRE_STATE_FILE"
-    printf "" > "$IPRE_TARGETS_FILE"
-
-    ipre_action_run > "$IPRE_RAM_LIST_FILE" 2>/dev/null
-    local line_num="$(awk -v ic="$IPRE_ICONS" -v t="$target_name" '{
-        str = $0;
-        if(ic == "1") sub(/^[^ ]+ /, "", str);
-        if(str == t || str == t"/") {print NR; exit}
-    }' "$IPRE_RAM_LIST_FILE")"
-
-    [[ -n "$line_num" ]] && echo "$line_num" > "$IPRE_RAM_POS_FILE"
-    echo "reload-sync(cat '$IPRE_RAM_LIST_FILE')+clear-query"
+    printf 'all\n' > "$IPRE_STATE_FILE"
+    : > "$IPRE_TARGETS_FILE"
+    ipre_action_refresh_and_focus
 }
 
 ipre_action_right() {
-    local cur="$(<"$IPRE_CWD_FILE")"
-    cd "$cur" || exit 0
+    cd -- "$IPRE_CWD" || return 1
     if [[ -n "$ITEM" ]]; then
-        local target_path new
-        if [[ "$ITEM" == /* ]]; then
-            target_path="$ITEM"
-        else
-            target_path="$cur/$ITEM"
-        fi
-
-        if [[ -d "$target_path" ]]; then
-            new="$(realpath -s "$target_path")"
-        else
-            new="$(realpath -s "${target_path:h}")"
-        fi
-        [[ -z "$new" ]] && new="$cur"
-        echo "$new" > "$IPRE_CWD_FILE"
+        local target="${ITEM:a}"
+        [[ -d "$target" ]] && ipre_set_cwd "$target" || ipre_set_cwd "${target:h}"
     fi
-    echo 'all' > "$IPRE_STATE_FILE"
-    printf "" > "$IPRE_TARGETS_FILE"
-    ipre_action_run || true
+    printf 'all\n' > "$IPRE_STATE_FILE"
+    : > "$IPRE_TARGETS_FILE"
+    rm -f -- "$IPRE_RAM_FOCUS_FILE"
+    : > "$IPRE_RAM_POS_FILE"
+    ipre_action_run
 }
 
 
 #####     Modify entry: select|create|copy|cut|delete|rename etc     #####
 ipre_action_mark() {
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    cd "$IPRE_CWD" || exit 0
     [[ $# -eq 0 || -z "$1" ]] && exit 0
 
     touch "$IPRE_SELECT_FILE"
-    local i target
-    for i in "$@"; do
-        target="$(realpath -s "$i")"
-        echo "$target" >> "$IPRE_SELECT_FILE"
-    done
+    ipre_path_lines "$@" >> "$IPRE_SELECT_FILE"
     local -a dedup=("${(@f)$(awk '!seen[$0]++' "$IPRE_SELECT_FILE")}")
-    printf "%s\n" "${dedup[@]}" > "$IPRE_SELECT_FILE"
+    printf '%s\n' "${dedup[@]}" > "$IPRE_SELECT_FILE"
 }
 
 ipre_action_new() {
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    cd "$IPRE_CWD" || exit 0
     clear
     print_title "Create New"
     printf 'Current Dir : %s\n' "$(print_label "$PWD")"
     printf 'Syntax Hint : End with %s to create a directory.\n' "$(print_hl "/")"
     printf 'Tokenize    : No need to quote spaces; single quotes are literal and not stripped\n'
+    printf '%s\n' 'Name escapes: \n for newline, \t for TAB, \\ for backslash.'
     printf 'Multiple    : Separate with commas (e.g., file1, dir2/, dir3/file3)\n'
     printf 'Cancel      : Clear input (%s) and press %s (or type %s)\n' "$(print_hl "Ctrl+U")" "$(print_hl "Enter")" "$(print_hl ":q")"
     printf 'Batch Mode  : Type %s or %s and press Enter to open Vim\n\n' "$(print_hl ":v")" "$(print_hl "/vim")"
@@ -511,7 +504,7 @@ ipre_action_new() {
 # 1. Write one item per line.
 # 2. End with '/' to create a directory (e.g., src/components/ )
 # 3. Lines starting with '#' or empty lines will be ignored.
-# 4. No need to quote spaces; single quotes are literal and not stripped.
+# 4. Spaces and quotes are literal. Escapes: \\ = backslash, \n = newline, \t = tab.
 # 5. Save and exit (:wq) to apply. Delete all lines or exit without saving (:q!) to cancel.
 
 EOF2
@@ -521,10 +514,12 @@ EOF2
             name="${name## #}"
             name="${name%% #}"
             [[ -z "$name" || "$name" == \#* ]] && continue
-            [[ ! -f "$IPRE_RAM_FOCUS_FILE" ]] && echo "$name" > "$IPRE_RAM_FOCUS_FILE"
+            ipre_text_unescape "$name" || { printf 'Invalid name escape\n' >&2; continue; }
+            name="$REPLY"
+            [[ ! -f "$IPRE_RAM_FOCUS_FILE" ]] && ipre_set_focus "$name"
             case "$name" in
-                */) mkdir -p "$name" ;;
-                *)  mkdir -p "${name:h}"; touch "$name" ;;
+                */) mkdir -p -- "$name" ;;
+                *)  mkdir -p -- "${name:h}"; touch -- "$name" ;;
             esac
         done
         rm -f -- "$tmpfile"
@@ -534,47 +529,82 @@ EOF2
             name="${name## #}"
             name="${name%% #}"
             [[ -z "$name" ]] && continue
-            [[ ! -f "$IPRE_RAM_FOCUS_FILE" ]] && echo "$name" > "$IPRE_RAM_FOCUS_FILE"
+            ipre_text_unescape "$name" || { printf 'Invalid name escape\n' >&2; continue; }
+            name="$REPLY"
+            [[ ! -f "$IPRE_RAM_FOCUS_FILE" ]] && ipre_set_focus "$name"
             case "$name" in
-                */) mkdir -p "$name" ;;
-                *)  mkdir -p "${name:h}"; touch "$name" ;;
+                */) mkdir -p -- "$name" ;;
+                *)  mkdir -p -- "${name:h}"; touch -- "$name" ;;
             esac
         done
     fi
 }
 
 ipre_action_copy() {
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    cd "$IPRE_CWD" || exit 0
     [[ $# -eq 0 || -z "$1" ]] && exit 0
+    [[ -n "$IPRE_NOTICE_FILE" ]] && : > "$IPRE_NOTICE_FILE"
     echo "COPY" > "$IPRE_CLIP_FILE"
-    local i
-    for i in "$@"; do realpath -s "$i" >> "$IPRE_CLIP_FILE"; done
+    ipre_path_lines "$@" >> "$IPRE_CLIP_FILE"
 }
 
 ipre_action_cut() {
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    cd "$IPRE_CWD" || exit 0
     [[ $# -eq 0 || -z "$1" ]] && exit 0
+    [[ -n "$IPRE_NOTICE_FILE" ]] && : > "$IPRE_NOTICE_FILE"
     echo "CUT" > "$IPRE_CLIP_FILE"
-    local i
-    for i in "$@"; do realpath -s "$i" >> "$IPRE_CLIP_FILE"; done
+    ipre_path_lines "$@" >> "$IPRE_CLIP_FILE"
 }
 
 ipre_action_paste() {
+    [[ -n "$IPRE_NOTICE_FILE" ]] && : > "$IPRE_NOTICE_FILE"
     [[ ! -s "$IPRE_CLIP_FILE" ]] && exit 0
-    local dest="$(<"$IPRE_CWD_FILE")"
+    local dest="$IPRE_CWD"
     local -a clip_lines=("${(@f)$(<"$IPRE_CLIP_FILE")}")
     local op="${clip_lines[1]}"
+    if [[ "$op" != COPY && "$op" != CUT ]]; then
+        printf 'Paste: invalid clipboard operation\n' >&2
+        [[ -n "$IPRE_NOTICE_FILE" ]] && printf 'Paste: invalid clipboard operation\n' > "$IPRE_NOTICE_FILE"
+        return 1
+    fi
 
-    # Declarations hoisted to avoid in-loop evaluation printing
-    local src base target name ext counter
-    for src in "${clip_lines[@]:1}"; do
-        [[ -z "$src" || ! -e "$src" ]] && continue
+    local src encoded base target name ext counter source_dir physical_dest focus_target="" clip_tmp
+    local failed=0 cut_completed=0 succeeded
+    local -a remaining=()
+    physical_dest="${dest:A}"
+    for encoded in "${clip_lines[@]:1}"; do
+        [[ -z "$encoded" ]] && continue
+        if ! ipre_saved_path_decode "$encoded"; then
+            remaining+=("$encoded")
+            (( ++failed ))
+            continue
+        fi
+        src="$REPLY"
+        if [[ ! -d "$dest" || ( ! -e "$src" && ! -L "$src" ) ]]; then
+            printf 'Paste: source or destination is unavailable: %s -> %s\n' "$src" "$dest" >&2
+            remaining+=("$encoded")
+            (( ++failed ))
+            continue
+        fi
+
+        # Cutting into the same parent is already complete, including path aliases.
+        if [[ "$op" == CUT && "${src:h:A}" == "$physical_dest" ]]; then
+            (( ++cut_completed ))
+            continue
+        fi
+        if [[ -d "$src" && ! -L "$src" ]]; then
+            source_dir="${src:A}"
+            if [[ "$physical_dest" == "$source_dir" || "$physical_dest" == "${source_dir%/}/"* ]]; then
+                printf 'Paste: cannot place a directory inside itself: %s -> %s\n' "$src" "$dest" >&2
+                remaining+=("$encoded")
+                (( ++failed ))
+                continue
+            fi
+        fi
 
         base="${src:t}"
         target="$dest/$base"
-        if [[ -e "$target" ]]; then
-            [[ "$op" == "CUT" && "$src" == "$target" ]] && continue
-
+        if [[ -e "$target" || -L "$target" ]]; then
             name="${base:r}"
             ext="${base:e}"
             if [[ -z "$name" ]]; then
@@ -585,271 +615,446 @@ ipre_action_paste() {
             fi
 
             counter=1
-            while [[ -e "$dest/${name}_copy${counter}${ext}" ]]; do
+            while [[ -e "$dest/${name}_copy${counter}${ext}" || -L "$dest/${name}_copy${counter}${ext}" ]]; do
                 ((counter++))
             done
             target="$dest/${name}_copy${counter}${ext}"
         fi
 
-        if [[ "$op" == "COPY" ]]; then
-            cp -r -- "$src" "$target"
-        elif [[ "$op" == "CUT" ]]; then
-            mv -- "$src" "$target"
+        succeeded=0
+        if [[ "$op" == COPY ]]; then
+            cp -r -- "$src" "$target" && succeeded=1
+        else
+            # A destination appearing after validation must not swallow the source.
+            mv -nT -- "$src" "$target" && [[ ! -e "$src" && ! -L "$src" ]] && succeeded=1
         fi
-
-        if [[ ! -f "$IPRE_RAM_FOCUS_FILE" ]]; then
-            echo "${target:t}" > "$IPRE_RAM_FOCUS_FILE"
+        if (( succeeded )); then
+            [[ -z "$focus_target" ]] && focus_target="$target"
+            [[ "$op" == CUT ]] && (( ++cut_completed ))
+        else
+            remaining+=("$encoded")
+            (( ++failed ))
         fi
     done
 
-    if [[ "$op" == "CUT" ]]; then
-        printf "" > "$IPRE_CLIP_FILE"
+    if [[ "$op" == CUT ]] && (( cut_completed )); then
+        # Preserve the previous buffer if writing the replacement fails.
+        if clip_tmp=$(mktemp -- "${IPRE_CLIP_FILE:h}/.ipre-clip.XXXXXX"); then
+            if (( ${#remaining[@]} )); then
+                printf '%s\n' CUT "${remaining[@]}" > "$clip_tmp"
+            else
+                : > "$clip_tmp"
+            fi
+            if (( $? != 0 )) || ! mv -f -- "$clip_tmp" "$IPRE_CLIP_FILE"; then
+                printf 'Paste: failed to update the cut buffer\n' >&2
+                rm -f -- "$clip_tmp"
+                (( ++failed ))
+            fi
+        else
+            printf 'Paste: failed to update the cut buffer\n' >&2
+            (( ++failed ))
+        fi
     fi
+    if [[ -n "$focus_target" ]]; then
+        ipre_set_focus "$focus_target"
+    fi
+    if (( failed )); then
+        [[ -n "$IPRE_NOTICE_FILE" ]] && printf 'Paste: %d failed\n' "$failed" > "$IPRE_NOTICE_FILE"
+        return 1
+    fi
+    return 0
 }
 
 ipre_action_delete() {
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    cd "$IPRE_CWD" || exit 0
     [[ $# -eq 0 || -z "$1" ]] && exit 0
-    clear
+    enter_alt_screen
+    {
+        print_warn "WARNING: SAFE TRASH CONFIRMATION"
+        printf "Current Dir : %s\n" "$(print_label "$PWD")"
+        printf "Are you sure you want to move the following %d item(s) to the hidden trash bin?\n" "$#"
 
-    print_warn "WARNING: SAFE TRASH CONFIRMATION"
-    printf "Current Dir : %s\n" "$(print_label "$PWD")"
-    printf "Are you sure you want to move the following %d item(s) to the hidden trash bin?\n" "$#"
-
-    local i base ts
-    for i in "$@"; do
-        printf "  %s\n" "$(print_hl "$i")"
-    done
-    printf "\nType \"y\" to confirm [y/N]: "
-
-    local ans
-    read -r ans </dev/tty
-    if [[ "$ans" == "y" || "$ans" == "Y" ]]; then
-        ts=$(date +%s)
+        local i base ts entry original ans
+        local moved=0 failed=0
         for i in "$@"; do
-            base="${i:t}"
-            mv -- "$i" "$IPRE_TRASH_DIR/${base}___${ts}"
+            printf "  %s\n" "$(print_hl "$i")"
         done
-        clear
-        printf "%bSuccessfully moved to trash.%b\n" "$C_GRN" "$C_RST"
+        printf "\nType \"y\" to confirm [y/N]: "
+        read -r ans </dev/tty || return 1
+        [[ "$ans" == "y" || "$ans" == "Y" ]] || return 0
+
+        ts=$(date +%s) || return 1
+        for i in "$@"; do
+            # Make the path absolute without resolving a symlink's target.
+            original="${i:a}"
+            base="${original:t}"
+            # Reserve a separate entry atomically, including across ipre sessions.
+            if [[ -z "$IPRE_TRASH_DIR" || ! -d "$IPRE_TRASH_DIR" ]] ||
+               ! entry=$(mktemp -d -- "$IPRE_TRASH_DIR/entry-${ts}.XXXXXX"); then
+                printf '%b[Error] Cannot create a trash entry for "%s".%b\n' "$C_RED" "$i" "$C_RST" >&2
+                (( ++failed ))
+                continue
+            fi
+            # Store the origin before moving data; NUL preserves any filename.
+            if ! mkdir -- "$entry/payload" ||
+               ! printf '%s\0' "$original" > "$entry/origin"; then
+                printf '%b[Error] Cannot save the original path for "%s".%b\n' "$C_RED" "$i" "$C_RST" >&2
+                ipre_trash_remove_empty_entry "$entry" 2>/dev/null
+                (( ++failed ))
+                continue
+            fi
+            if mv -- "$i" "$entry/payload/$base"; then
+                (( ++moved ))
+            else
+                printf '%b[Error] Failed to move "%s" to trash.%b\n' "$C_RED" "$i" "$C_RST" >&2
+                ipre_trash_remove_empty_entry "$entry" 2>/dev/null
+                (( ++failed ))
+            fi
+        done
+        if (( failed == 0 )); then
+            printf "%bMoved to trash: %d item(s).%b\n" "$C_GRN" "$moved" "$C_RST"
+        else
+            printf "%bMoved to trash: %d item(s); failed: %d.%b\n" "$C_YLW" "$moved" "$failed" "$C_RST"
+        fi
         sleep 0.5
+        (( failed == 0 ))
+    } always {
+        leave_alt_screen
+    }
+}
+
+ipre_rename_target_path() {
+    local source_path="$1" new_name="$2"
+    if [[ "$new_name" == /* ]]; then
+        REPLY="${new_name:a}"
+    else
+        REPLY="${source_path:h}/$new_name"
+        REPLY="${REPLY:a}"
     fi
 }
 
+ipre_rename_move() {
+    # Do not overwrite or move inside a destination that appears after validation.
+    mv -nT -- "$1" "$2" && [[ ! -e "$1" && ! -L "$1" ]]
+}
+
+ipre_rename_set_focus() {
+    [[ -f "$IPRE_RAM_FOCUS_FILE" ]] || ipre_set_focus "$1"
+}
+
 ipre_action_rename() {
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    cd "$IPRE_CWD" || exit 0
     [[ $# -eq 0 || -z "$1" ]] && exit 0
     clear
     print_title "Rename"
     printf 'Current Dir : %s\n' "$(print_label "$PWD")"
     printf 'Cancel/Skip : Clear input (%s) and press %s\n' "$(print_hl "Ctrl+U")" "$(print_hl "Enter")"
     printf 'Abort Batch : Type %s or %s and press Enter\n\n' "$(print_hl ":q")" "$(print_hl "/q")"
+    printf '%s\n' 'Name escapes: \n for newline, \t for TAB, \\ for backslash.'
 
-    local item old_name new_name clean_new target_dir val
+    local item old_path old_name new_name clean_new target_dir val REPLY
+    local failed=0
     for item in "$@"; do
-        [[ ! -e "$item" ]] && continue
-        old_name="${item:t}"
+        old_path="${item:a}"
+        [[ -e "$old_path" || -L "$old_path" ]] || continue
+        ipre_text_escape "${old_path:t}"
+        old_name="$REPLY"
+        printf 'Source Dir : %s\n' "$(print_label "${old_path:h}")"
 
-        # Use a safe Bash subshell to retain the `read -e -i` pre-fill behavior flawlessly
-        val=$(bash -c 'read -e -i "$1" -p "Rename '\''$1'\'' to: " ans </dev/tty && echo "$ans"' _ "$old_name")
-        new_name="$val"
+        # Keep the basename prefilled while the source path stays separate.
+        val=$(bash -c 'read -e -i "$1" -p "Rename '\''$1'\'' to: " ans </dev/tty && printf "%s\n" "$ans"' _ "$old_name")
+        if ! ipre_text_unescape "$val"; then
+            printf 'Invalid name escape; use \\ for a literal backslash\n' >&2
+            failed=1
+            continue
+        fi
+        new_name="$REPLY"
 
         # Explicitly abort the entire batch process
         [[ "$new_name" == ":q" || "$new_name" == "/q" ]] && break
         # Skip empty inputs
         [[ -z "$new_name" ]] && continue
 
-        if [[ -f "$old_name" ]]; then
+        if [[ ! -d "$old_path" || -L "$old_path" ]]; then
             case "$new_name" in
                 */)
                     printf "%b[Error] Cannot rename a file to a path ending with '/'.%b\n" "$C_RED" "$C_RST"
+                    failed=1
                     sleep 1.5
                     continue
                     ;;
             esac
         fi
 
-        clean_new="${new_name%%/##}"
-        [[ "$clean_new" == "$old_name" ]] && continue
-        if [[ -e "$clean_new" ]]; then
+        ipre_rename_target_path "$old_path" "$new_name"
+        clean_new="$REPLY"
+        [[ "$clean_new" == "$old_path" ]] && continue
+        if [[ -e "$clean_new" || -L "$clean_new" ]]; then
             printf "%b[Error] '%s' already exists. Skipping.%b\n" "$C_RED" "$clean_new" "$C_RST"
+            failed=1
             sleep 1.5
             continue
         fi
 
         target_dir="${clean_new:h}"
-        if [[ "$target_dir" != "." && ! -d "$target_dir" ]]; then
-            mkdir -p "$target_dir"
+        if ! mkdir -p -- "$target_dir" || ! ipre_rename_move "$old_path" "$clean_new"; then
+            printf '%b[Error] Failed to rename "%s" to "%s".%b\n' "$C_RED" "$old_path" "$clean_new" "$C_RST" >&2
+            failed=1
+            continue
         fi
-        mv -- "$old_name" "$clean_new"
-        if [[ ! -f "$IPRE_RAM_FOCUS_FILE" ]]; then
-            echo "${clean_new:t}" > "$IPRE_RAM_FOCUS_FILE"
-        fi
+        ipre_rename_set_focus "$clean_new"
     done
+    (( failed == 0 ))
+}
+
+ipre_wdired_show_errors() {
+    enter_alt_screen
+    {
+        print_warn "Wdired Completed with Errors"
+        local err
+        for err in "$@"; do
+            ipre_text_escape "$err"
+            printf "  %b- %s%b\n" "$C_YLW" "$REPLY" "$C_RST"
+        done
+        printf "\nPress any key to return..."
+        read -k 1 -s _ < /dev/tty
+    } always {
+        leave_alt_screen
+    }
 }
 
 # FIXME: This function is potentially unsafe; there may be edge cases I haven't accounted for.
 ipre_action_wdired() {
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    cd "$IPRE_CWD" || exit 0
     [[ $# -eq 0 || -z "$1" ]] && exit 0
-    local tmpfile="$(mktemp)"
-
-    cat << 'EOF' > "$tmpfile"
+    local tmpfile
+    tmpfile=$(mktemp) || return 1
+    {
+        cat << 'EOF' > "$tmpfile"
 # === Wdired Batch Rename ===
-# Edit the names on the RIGHT side of the arrow ( -> ).
-# DO NOT change the left side, delete lines, or reorder them.
+# Edit the name after the TAB on each [id] row. Keep the identifiers.
+# Source paths are comments; the actual source is fixed by its identifier.
+# Escapes: \\ for backslash, \n for newline, \t for tab, \xHH for a byte.
+# New names are relative to each selected item's parent directory.
 # Save and exit to apply. Delete all text to abort.
 # WARN: This function is potentially unsafe; there may be edge cases I haven't accounted for.
 
 EOF
 
-    local item old_name
-    for item in "$@"; do
-        [[ ! -e "$item" ]] && continue
-        old_name="${item:t}"
-        printf "%s -> %s\n" "$old_name" "$old_name" >> "$tmpfile"
-    done
-    ${EDITOR:-nvim} "$tmpfile" </dev/tty >/dev/tty
-    local -a tmp_lines=("${(@f)$(<"$tmpfile")}")
-    local line left_part right_part new_name clean_new target_dir
-    local -a errors=()
-    local -a valid_olds=() valid_news=()
-    local -A old_set=() new_set=()
-    # --- Phase 0.1: Parse and Basic Validation ---
-    for line in "${tmp_lines[@]}"; do
-        [[ -z "$line" || "$line" == \#* ]] && continue
-        if [[ "$line" != *" -> "* ]]; then
-            continue
-        fi
-        left_part="${line%% -> *}"
-        right_part="${line#* -> }"
-        old_name="${left_part}"
-        new_name="${right_part}"
-        [[ -z "$new_name" || "$new_name" == "$old_name" ]] && continue
-        [[ ! -e "$old_name" ]] && continue
-        if [[ -f "$old_name" ]]; then
-            case "$new_name" in
-                */)
-                    errors+=("Cannot rename file '$old_name' to a path ending with '/'")
-                    continue
-                    ;;
-            esac
-        fi
-        clean_new="${new_name%%/##}"
-        [[ "$clean_new" == "$old_name" ]] && continue
-        # Prevent multiple files targeting the exact same new name internally
-        if [[ -n "${new_set[$clean_new]}" ]]; then
-            errors+=("Multiple files target '$clean_new'. Skipped '$old_name'")
-            continue
-        fi
-        valid_olds+=("$old_name")
-        valid_news+=("$clean_new")
-        old_set[$old_name]=1
-        new_set[$clean_new]=1
-    done
-
-    # --- Phase 0.2: Iterative Pruning (Cascade Rollback) ---
-    # Continuously evaluate conflicts until the dependency chain is perfectly stable
-    local changed=1
-    local i o n
-    while (( changed )); do
-        changed=0
-        local -a next_olds=() next_news=()
-        for (( i=1; i<=${#valid_olds[@]}; i++ )); do
-            o="${valid_olds[$i]}"
-            n="${valid_news[$i]}"
-            # If target exists physically AND is NOT part of the currently moving items
-            if [[ -e "$n" && -z "${old_set[$n]}" ]]; then
-                errors+=("'$n' blocks path. Cascade cancelled rename for '$o'")
-                # CRITICAL: Remove this dropped item from the safe set so dependents will fail in the next loop
-                unset "old_set[$o]"
-                changed=1
-            else
-                next_olds+=("$o")
-                next_news+=("$n")
-            fi
+        local item source_path prefix line id new_name clean_new target_dir REPLY
+        local -a sources=() prefixes=() errors=() valid_olds=() valid_news=()
+        local -A seen_sources=() seen_rows=() old_set=() new_set=()
+        for item in "$@"; do
+            source_path="${item:a}"
+            [[ -e "$source_path" || -L "$source_path" ]] || continue
+            [[ -n "${seen_sources[$source_path]}" ]] && continue
+            seen_sources[$source_path]=1
+            sources+=("$source_path")
+            prefix="[${#sources[@]}]"$'\t'
+            prefixes+=("$prefix")
+            ipre_text_escape "$item"
+            printf '# [%d] Source: %s\n' "${#sources[@]}" "$REPLY" >> "$tmpfile"
+            ipre_text_escape "${source_path:t}"
+            printf '%s%s\n' "$prefix" "$REPLY" >> "$tmpfile"
         done
-        valid_olds=("${next_olds[@]}")
-        valid_news=("${next_news[@]}")
-    done
+        if (( ${#errors[@]} )); then
+            ipre_wdired_show_errors "${errors[@]}"
+            return 1
+        fi
+        (( ${#sources[@]} )) || return 0
+        ${EDITOR:-nvim} "$tmpfile" </dev/tty >/dev/tty || return 1
+        local -a tmp_lines=("${(@f)$(<"$tmpfile")}")
 
-    # --- Phase 1 & 2: Safe Execution (Two-pass algorithm) ---
-    local -a final_olds=("${valid_olds[@]}")
-    local -a final_news=("${valid_news[@]}")
-    local -a final_tmps=()
-    for (( i=1; i<=${#final_olds[@]}; i++ )); do
-        final_tmps+=("${final_olds[$i]}.__ipre_tmp_${RANDOM}_$$")
-    done
-    for (( i=1; i<=${#final_olds[@]}; i++ )); do
-        mv -- "${final_olds[$i]}" "${final_tmps[$i]}"
-    done
-    for (( i=1; i<=${#final_tmps[@]}; i++ )); do
-        target_dir="${final_news[$i]:h}"
-        if [[ "$target_dir" != "." && ! -d "$target_dir" ]]; then
-            mkdir -p "$target_dir"
+        # The editable text can never supply a new source path.
+        for line in "${tmp_lines[@]}"; do
+            [[ -z "$line" || "$line" == \#* ]] && continue
+            if [[ "$line" != \[<->\]$'\t'* ]]; then
+                errors+=("Invalid batch rename row: $line")
+                continue
+            fi
+            id="${${line#\[}%%\]*}"
+            if (( id < 1 || id > ${#sources[@]} )) || [[ -n "${seen_rows[$id]}" ]]; then
+                errors+=("Invalid or repeated batch rename identifier: $id")
+                continue
+            fi
+            seen_rows[$id]=1
+            prefix="${prefixes[$id]}"
+            if [[ "$line" != "$prefix"* ]]; then
+                errors+=("The identifier or TAB on row $id was changed")
+                continue
+            fi
+            source_path="${sources[$id]}"
+            if ! ipre_text_unescape "${line#"$prefix"}"; then
+                errors+=("Invalid name escape on row $id")
+                continue
+            fi
+            new_name="$REPLY"
+            [[ -z "$new_name" ]] && continue
+            if [[ ! -d "$source_path" || -L "$source_path" ]]; then
+                if [[ "$new_name" == */ ]]; then
+                    errors+=("Cannot rename '$source_path' to a path ending with '/'")
+                    continue
+                fi
+            fi
+            ipre_rename_target_path "$source_path" "$new_name"
+            clean_new="$REPLY"
+            [[ "$clean_new" == "$source_path" ]] && continue
+            if [[ -n "${new_set[$clean_new]}" ]]; then
+                errors+=("Multiple files target '$clean_new'")
+                continue
+            fi
+            valid_olds+=("$source_path")
+            valid_news+=("$clean_new")
+            old_set[$source_path]=1
+            new_set[$clean_new]=1
+        done
+        # A blank edit aborts; a partially damaged edit must not move any files.
+        if (( ${#seen_rows[@]} == 0 && ${#errors[@]} == 0 )); then
+            return 0
         fi
-        mv -- "${final_tmps[$i]}" "${final_news[$i]}"
-        if [[ ! -f "$IPRE_RAM_FOCUS_FILE" ]]; then
-            echo "${final_news[$i]:t}" > "$IPRE_RAM_FOCUS_FILE"
+        local i o n
+        for (( i=1; i<=${#sources[@]}; i++ )); do
+            [[ -n "${seen_rows[$i]}" ]] || errors+=("Batch rename row $i is missing")
+        done
+        if (( ${#errors[@]} )); then
+            ipre_wdired_show_errors "${errors[@]}"
+            return 1
         fi
-    done
-    rm -f -- "$tmpfile"
-    if [[ ${#errors[@]} -gt 0 ]]; then
-        {
-            enter_alt_screen
-            print_warn "Wdired Completed with Errors (Rollback Applied)"
-            local err
-            for err in "${errors[@]}"; do
-                printf "  %b- %s%b\n" "$C_YLW" "$err" "$C_RST"
+
+        # Prevent staging a parent directory from invalidating another row's paths.
+        for o in "${valid_olds[@]}" "${valid_news[@]}"; do
+            for n in "${valid_olds[@]}" "${valid_news[@]}"; do
+                if [[ "$n" == "$o/"* ]]; then
+                    errors+=("Rename a directory and its children in separate batches: '$o', '$n'")
+                    break 2
+                fi
             done
-            echo ""
-            printf "Press any key to return..."
-        } > /dev/tty
+        done
+        if (( ${#errors[@]} )); then
+            ipre_wdired_show_errors "${errors[@]}"
+            return 1
+        fi
 
-        read -k 1 -s _ < /dev/tty
-        leave_alt_screen
-    fi
+        # Remove blocked rows repeatedly so swaps and dependency chains stay safe.
+        local changed=1
+        local -a next_olds=() next_news=()
+        while (( changed )); do
+            changed=0
+            next_olds=() next_news=()
+            for (( i=1; i<=${#valid_olds[@]}; i++ )); do
+                o="${valid_olds[$i]}"
+                n="${valid_news[$i]}"
+                if [[ ( -e "$n" || -L "$n" ) && -z "${old_set[$n]}" ]]; then
+                    errors+=("'$n' blocks the rename of '$o'")
+                    unset "old_set[$o]"
+                    changed=1
+                else
+                    next_olds+=("$o")
+                    next_news+=("$n")
+                fi
+            done
+            valid_olds=("${next_olds[@]}")
+            valid_news=("${next_news[@]}")
+        done
+
+        # Reserve temporary directories beside each source before moving anything.
+        local stage_dir failed=0 staged=0 committed=0
+        local -a stage_dirs=() stage_paths=()
+        for o in "${valid_olds[@]}"; do
+            if ! stage_dir=$(mktemp -d -- "${o:h}/.ipre-rename.XXXXXX"); then
+                errors+=("Cannot reserve a temporary path for '$o'")
+                failed=1
+                break
+            fi
+            stage_dirs+=("$stage_dir")
+            stage_paths+=("$stage_dir/${o:t}")
+        done
+        if (( ! failed )); then
+            for (( i=1; i<=${#valid_olds[@]}; i++ )); do
+                if ! ipre_rename_move "${valid_olds[$i]}" "${stage_paths[$i]}"; then
+                    errors+=("Failed to stage '${valid_olds[$i]}'")
+                    failed=1
+                    break
+                fi
+                (( ++staged ))
+            done
+        fi
+        if (( ! failed )); then
+            for (( i=1; i<=${#valid_news[@]}; i++ )); do
+                target_dir="${valid_news[$i]:h}"
+                if ! mkdir -p -- "$target_dir" ||
+                   ! ipre_rename_move "${stage_paths[$i]}" "${valid_news[$i]}"; then
+                    errors+=("Failed to rename '${valid_olds[$i]}' to '${valid_news[$i]}'")
+                    failed=1
+                    break
+                fi
+                (( ++committed ))
+            done
+        fi
+        if (( failed )); then
+            # Move committed rows back to staging first, then restore original paths.
+            for (( i=committed; i>=1; i-- )); do
+                ipre_rename_move "${valid_news[$i]}" "${stage_paths[$i]}" ||
+                    errors+=("Rollback failed; data remains at '${valid_news[$i]}'")
+            done
+            for (( i=staged; i>=1; i-- )); do
+                if [[ -e "${stage_paths[$i]}" || -L "${stage_paths[$i]}" ]]; then
+                    ipre_rename_move "${stage_paths[$i]}" "${valid_olds[$i]}" ||
+                        errors+=("Rollback failed; data remains at '${stage_paths[$i]}'")
+                fi
+            done
+        elif (( ${#valid_news[@]} )); then
+            ipre_rename_set_focus "${valid_news[1]}"
+        fi
+        for stage_dir in "${stage_dirs[@]}"; do
+            rmdir -- "$stage_dir" 2>/dev/null
+        done
+        if (( ${#errors[@]} )); then
+            ipre_wdired_show_errors "${errors[@]}"
+            return 1
+        fi
+        return 0
+    } always {
+        rm -f -- "$tmpfile"
+    }
 }
 
 
 #####     selection & clip system management     #####
 # Generalized List Jumper (Used by Bookmarks and Selection)
 ipre_action_jump_from_list() {
-    local list_file="$1"
-    local prompt_text="$2"
-    local hint_text="$3"
-
+    local list_file="$1" prompt_text="$2" hint_text="$3"
     touch "$list_file"
-    local -a items=("${(@f)$(<"$list_file")}")
-    local -a valid_items
-    local item
-
+    local -a items=("${(@f)$(<"$list_file")}") valid_items=() records=()
+    local item value
     for item in "${items[@]}"; do
-        [[ -n "$item" && -e "$item" ]] && valid_items+=("$item")
+        ipre_saved_path_decode "$item" || continue
+        value="$REPLY"
+        [[ -e "$value" || -L "$value" ]] || continue
+        valid_items+=("$item")
+        ipre_text_escape "$value"
+        records+=("$item"$'\t'"$REPLY")
     done
-    printf "%s\n" "${valid_items[@]}" > "$list_file"
-
-    if [[ ${#valid_items[@]} -eq 0 ]]; then
+    : > "$list_file"
+    (( ${#valid_items[@]} )) && printf '%s\n' "${valid_items[@]}" > "$list_file"
+    if (( ! ${#valid_items[@]} )); then
         clear
         print_warn "No valid items found in ${prompt_text}."
-        [[ -n "$hint_text" ]] && printf "%s\n\n" "$hint_text"
-        printf "Press any key to continue..."
+        [[ -n "$hint_text" ]] && printf '%s\n\n' "$hint_text"
+        printf 'Press any key to continue...'
         read -k 1 -s _ < /dev/tty
         return 1
     fi
-
-    local selected="$(fzf --prompt "${prompt_text} > " --reverse < "$list_file")"
-    if [[ -n "$selected" ]]; then
-        if [[ -d "$selected" ]]; then
-            echo "$selected" > "$IPRE_CWD_FILE"
-        else
-            echo "${selected:h}" > "$IPRE_CWD_FILE"
-        fi
-        echo 'all' > "$IPRE_STATE_FILE"
-        printf "" > "$IPRE_TARGETS_FILE"
-        return 0 # Success jump
-    fi
-    return 1 # Cancelled
+    local selected
+    selected=$(printf '%s\n' "${records[@]}" | fzf --prompt "${prompt_text} > " --reverse --delimiter=$'\t' --with-nth=2)
+    [[ -n "$selected" ]] || return 1
+    ipre_record_path "$selected" || return 1
+    value="$REPLY"
+    [[ -d "$value" ]] && ipre_set_cwd "$value" || ipre_set_cwd "${value:h}"
+    [[ ! -d "$value" ]] && ipre_set_focus "$value"
+    printf 'all\n' > "$IPRE_STATE_FILE"
+    : > "$IPRE_TARGETS_FILE"
+    return 0
 }
 
 # inspect selection & clip system(buffer)
@@ -900,7 +1105,8 @@ ipre_action_show_buffers() {
                 if [[ $clip_cnt -gt 0 ]]; then
                     local filepath
                     for filepath in "${clip_paths[@]}"; do
-                        printf "  %b%s%b\n" "$C_YLW" "$filepath" "$C_RST"
+                        ipre_saved_path_decode "$filepath" || continue
+                        printf "  %s\n" "$(print_hl "$REPLY")"
                     done
                 else
                     printf "  (Empty)\n"
@@ -910,7 +1116,8 @@ ipre_action_show_buffers() {
                 if [[ $sel_cnt -gt 0 ]]; then
                     local filepath
                     for filepath in "${sel_paths[@]}"; do
-                        printf "  %b%s%b\n" "$C_CYN" "$filepath" "$C_RST"
+                        ipre_saved_path_decode "$filepath" || continue
+                        printf "  %s\n" "$(print_label "$REPLY")"
                     done
                 else
                     printf "  (Empty)\n"
@@ -971,12 +1178,20 @@ ipre_action_show_buffers() {
             v|V|:v|/vim)
                 local tmpfile="$(mktemp)"
                 local -a c_paths=() s_paths=()
-                [[ $clip_cnt -gt 0 ]] && c_paths=("${clip_paths[@]}")
-                [[ $sel_cnt -gt 0 ]] && s_paths=("${sel_paths[@]}")
+                local encoded
+                for encoded in "${clip_paths[@]}"; do
+                    ipre_saved_path_decode "$encoded" || continue
+                    ipre_text_escape "$REPLY"; c_paths+=("$REPLY")
+                done
+                for encoded in "${sel_paths[@]}"; do
+                    ipre_saved_path_decode "$encoded" || continue
+                    ipre_text_escape "$REPLY"; s_paths+=("$REPLY")
+                done
 
                 cat << EOF > "$tmpfile"
 # === IPRE BUFFER INSPECTOR ===
-# Modify paths directly. Invalid/non-existent paths will be automatically dropped.
+# Modify escaped paths: \\ = backslash, \n = newline, \t = tab.
+# Invalid/non-existent paths will be automatically dropped.
 # Delete a line to remove it from the buffer.
 
 [OPERATION]
@@ -1012,9 +1227,10 @@ EOF
                             errors+=("Invalid operation '$line'. Defaulted to COPY.")
                         fi
                     elif [[ "$mode" == "clip" || "$mode" == "sel" ]]; then
-                        if [[ -e "$line" ]]; then
-                            [[ "$mode" == "clip" ]] && new_clip+=("$line")
-                            [[ "$mode" == "sel" ]] && new_sel+=("$line")
+                        if ipre_text_unescape "$line" && [[ -e "$REPLY" || -L "$REPLY" ]]; then
+                            ipre_path_encode "${REPLY:a}"
+                            [[ "$mode" == "clip" ]] && new_clip+=("$REPLY")
+                            [[ "$mode" == "sel" ]] && new_sel+=("$REPLY")
                         else
                             errors+=("Dropped invalid/missing path: $line")
                         fi
@@ -1041,7 +1257,8 @@ EOF
                         print_warn "Inspector Finished with Notices"
                         local err
                         for err in "${errors[@]}"; do
-                            printf "  %b- %s%b\n" "$C_YLW" "$err" "$C_RST"
+                            ipre_text_escape "$err"
+            printf "  %b- %s%b\n" "$C_YLW" "$REPLY" "$C_RST"
                         done
                         echo ""
                         printf "Press any key to return..."
@@ -1072,15 +1289,11 @@ EOF
 
 #####     yank path     #####
 ipre_action_yank_path() {
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    cd "$IPRE_CWD" || exit 0
     local item
     local -a paths=()
     for item in "$@"; do
-        if [[ "$IPRE_ICONS" == "1" ]]; then
-            local stripped="${item#* }"
-            [[ ! -e "$item" && ! -L "$item" ]] && item="$stripped"
-        fi
-        paths+=("$(realpath -s -- "$item")")
+        paths+=("${item:a}")
     done
     if [[ ${#paths[@]} -gt 0 ]]; then
         printf "%s\n" "${paths[@]}" | ${CLIPBOARD:-wl-copy}
@@ -1089,7 +1302,7 @@ ipre_action_yank_path() {
 
 #####     ipre bookmark     #####
 ipre_action_bookmark() {
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    cd "$IPRE_CWD" || exit 0
     [[ $# -eq 0 || -z "$1" ]] && exit 0
 
     touch "$IPRE_BOOKMARKS_FILE"
@@ -1097,9 +1310,10 @@ ipre_action_bookmark() {
 
     local i target
     for i in "$@"; do
-        target="$(realpath -s "$i")"
+        ipre_path_encode "${i:a}"
+        target="$REPLY"
         if [[ -z "${bookmarks[(r)$target]}" ]]; then
-            echo "$target" >> "$IPRE_BOOKMARKS_FILE"
+            printf '%s\n' "$target" >> "$IPRE_BOOKMARKS_FILE"
             bookmarks+=("$target")
         fi
     done
@@ -1111,7 +1325,7 @@ ipre_action_open_bookmarks() {
 
 # Smart Diff (Requires exactly 2 files in Selection Buffer)
 ipre_action_smart_diff() {
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    cd "$IPRE_CWD" || exit 0
     enter_alt_screen
     if [[ ! -s "$IPRE_SELECT_FILE" ]]; then
         print_warn "Selection buffer is empty. Mark 2 files first."
@@ -1128,8 +1342,10 @@ ipre_action_smart_diff() {
         leave_alt_screen
         exit 0
     fi
-    local file1="${sel_lines[1]}"
-    local file2="${sel_lines[2]}"
+    ipre_saved_path_decode "${sel_lines[1]}" || return 1
+    local file1="$REPLY"
+    ipre_saved_path_decode "${sel_lines[2]}" || return 1
+    local file2="$REPLY"
     if [[ ! -f "$file1" || ! -f "$file2" ]]; then
         print_warn "Both targets must be valid files, not directories."
         printf "Press any key to return..."
@@ -1143,68 +1359,82 @@ ipre_action_smart_diff() {
     leave_alt_screen
 }
 
+# rg's NUL separates the filename from line:column:text. Only the first two
+# colons in that second part are metadata; filenames and contents stay intact.
+ipre_action_rg_stream() {
+    [[ -n "$1" ]] || return 0
+    cd -- "$IPRE_CWD" || return 1
+    local filepath rest number column content label key IPRE_INPUT_BUFFER=""
+    rg --column --line-number --with-filename --no-heading --color=never --smart-case --null -- "$1" . 2>/dev/null | while ipre_stream_read $'\0'; do
+        filepath="$REPLY"
+        ipre_stream_read $'\n' || break
+        rest="$REPLY"
+        number="${rest%%:*}"; rest="${rest#*:}"
+        column="${rest%%:*}"; content="${rest#*:}"
+        [[ "$number" == <-> && "$column" == <-> ]] || continue
+        filepath="${filepath:a}"
+        ipre_path_encode "$filepath"; key="$REPLY"
+        ipre_display_path "$filepath"; label="$REPLY"
+        ipre_text_escape "$content"
+        printf '%s\t%s\t%s\t%s:%s:%s:%s\n' "$key" "$number" "$column" "$label" "$number" "$column" "$REPLY"
+    done
+    return 0
+}
+
+ipre_action_rg_preview() {
+    [[ -f "$1" && "$2" == <-> ]] || return 1
+    if command -v bat >/dev/null; then
+        bat --color=always --style=numbers --highlight-line "$2" -- "$1"
+    else
+        cat -- "$1"
+    fi
+}
+
 ipre_action_live_grep() {
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
-    if ! command -v rg &> /dev/null; then
-        enter_alt_screen
-        print_warn "Ripgrep is not installed."
-        printf "Press any key to return..."
-        read -k 1 -s _ < /dev/tty
-        leave_alt_screen
-        exit 0
-    fi
-
+    command -v rg >/dev/null || return 1
     enter_alt_screen
-    local RG_PREFIX="rg --column --line-number --no-heading --color=always --smart-case"
-    local selected
-    selected=$(
-        fzf -m --prompt "Ripgrep > " \
-            --ansi --disabled --layout=reverse \
-            --bind "start:reload:$RG_PREFIX {q} || true" \
-            --bind "change:reload:sleep 0.1; $RG_PREFIX {q} || true" \
-            --bind "alt-f:unbind(change)+change-prompt(Fuzzy > )+enable-search+clear-query" \
-            --bind "alt-r:rebind(change)+change-prompt(Ripgrep > )+disable-search+clear-query+reload($RG_PREFIX {q} || true)" \
-            --bind "alt-a:select-all" \
-            --bind "alt-d:deselect-all" \
-            --bind "ctrl-f:preview-half-page-down" \
-            --bind "ctrl-b:preview-half-page-up" \
-            --preview "cd '$(<"$IPRE_CWD_FILE")' && pre {1} {2} 2>/dev/null" \
-            --preview-window "right:50%,border-left,+{2}-/2" \
-            --delimiter ":" \
-            < /dev/tty
-    )
-    leave_alt_screen
-
-    if [[ -n "$selected" ]]; then
-        local -a lines=("${(@f)selected}")
-        local -A unique_files
-        local first_target=""
-        for line in "${lines[@]}"; do
-            local filepath="${line%%:*}"
-            if [[ -n "$filepath" && -e "$filepath" ]]; then
-                filepath="$(realpath -s "$filepath")"
-                unique_files[$filepath]=1
-                [[ -z "$first_target" ]] && first_target="$filepath"
-            fi
+    {
+        local backend="${(q)IPRE_BACKEND_CMD}" selected line filepath key
+        local -a unique_keys=()
+        selected=$(
+            fzf -m --prompt 'Ripgrep > ' --disabled --layout=reverse \
+                --delimiter=$'\t' --with-nth=4 \
+                --bind "start:reload:$backend ipre_action_rg_stream -- {q}" \
+                --bind "change:reload:$backend ipre_action_rg_stream -- {q}" \
+                --bind 'alt-f:unbind(change)+change-prompt(Fuzzy > )+enable-search+clear-query' \
+                --bind "alt-r:rebind(change)+change-prompt(Ripgrep > )+disable-search+clear-query+reload($backend ipre_action_rg_stream -- {q})" \
+                --bind 'alt-a:select-all' --bind 'alt-d:deselect-all' \
+                --bind 'ctrl-f:preview-half-page-down' --bind 'ctrl-b:preview-half-page-up' \
+                --preview "$backend ipre_action_rg_preview --encoded {1} {2}" \
+                --preview-window 'right:50%,border-left,+{2}-/2' < /dev/tty
+        )
+        [[ -n "$selected" ]] || return 0
+        local -A seen=()
+        for line in "${(@f)selected}"; do
+            ipre_record_path "$line" || continue
+            filepath="$REPLY"
+            [[ -e "$filepath" || -L "$filepath" ]] || continue
+            key="${line%%$'\t'*}"
+            [[ -n "${seen[$key]}" ]] && continue
+            seen[$key]=1; unique_keys+=("$key")
         done
-        # Inject items into the Selection Buffer (Mark system)
-        if [[ ${#unique_files[@]} -gt 0 ]]; then
-            local target_dir="${first_target:h}"
-            local target_name="${first_target:t}"
-            echo "$target_dir" > "$IPRE_CWD_FILE"
-            echo 'all' > "$IPRE_STATE_FILE"
-            printf "" > "$IPRE_TARGETS_FILE"
-            echo "$target_name" > "$IPRE_RAM_FOCUS_FILE"
-            if [[ ${#unique_files[@]} -gt 1 ]]; then
-                local f
-                for f in ${(k)unique_files}; do
-                    if ! grep -Fxq "$f" "$IPRE_SELECT_FILE" 2>/dev/null; then
-                        echo "$f" >> "$IPRE_SELECT_FILE"
-                    fi
-                done
-            fi
+        (( ${#unique_keys[@]} )) || return 0
+        ipre_saved_path_decode "${unique_keys[1]}" || return 1
+        filepath="$REPLY"
+        ipre_set_cwd "${filepath:h}"
+        ipre_set_focus "$filepath"
+        printf 'all\n' > "$IPRE_STATE_FILE"
+        : > "$IPRE_TARGETS_FILE"
+        if (( ${#unique_keys[@]} > 1 )); then
+            touch "$IPRE_SELECT_FILE"
+            local -aU merged=()
+            [[ -s "$IPRE_SELECT_FILE" ]] && merged=("${(@f)$(<"$IPRE_SELECT_FILE")}")
+            merged+=("${unique_keys[@]}")
+            printf '%s\n' "${merged[@]}" > "$IPRE_SELECT_FILE"
         fi
-    fi
+    } always {
+        leave_alt_screen
+    }
 }
 
 ipre_action_zoxide() {
@@ -1218,11 +1448,16 @@ ipre_action_zoxide() {
 
     enter_alt_screen
     local selected
-    selected=$(zoxide query -l | fzf --prompt "Zoxide> " --reverse --preview "cd '$(<"$IPRE_CWD_FILE")' && pre {} 2>/dev/null" --preview-window "right:50%,border-left")
+    selected=$(
+        zoxide query -l | while IFS= read -r value; do
+            [[ -d "$value" ]] && ipre_emit_record "$value"
+        done | fzf --prompt 'Zoxide> ' --reverse --delimiter=$'\t' --with-nth=2 \
+            --preview "${(q)IPRE_BACKEND_CMD} ipre_action_preview_with_page --encoded {1}" --preview-window 'right:50%,border-left'
+    )
     leave_alt_screen
 
-    if [[ -n "$selected" && -d "$selected" ]]; then
-        echo "$selected" > "$IPRE_CWD_FILE"
+    if [[ -n "$selected" ]] && ipre_record_path "$selected" && [[ -d "$REPLY" ]]; then
+        ipre_set_cwd "$REPLY"
         echo 'all' > "$IPRE_STATE_FILE"
         printf "" > "$IPRE_TARGETS_FILE"
         # Explicitly clear RAM focus to avoid jumping to a non-existent file in the new directory
@@ -1232,12 +1467,12 @@ ipre_action_zoxide() {
 
 # Global Search & Replace (via Neovim + grug-far.nvim)
 ipre_action_global_replace_rg() {
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    cd "$IPRE_CWD" || exit 0
     # Launch Neovim and automatically execute the :GrugFar command.
     ${EDITOR:-nvim} -c "GrugFar"
 }
 ipre_action_global_replace_ast_rg() {
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    cd "$IPRE_CWD" || exit 0
     ${EDITOR:-nvim} -c "lua require('grug-far').open({ engine = 'astgrep' })"
 }
 
@@ -1281,7 +1516,7 @@ ipre_action_help() {
 
 #####     ipre post action config     #####
 ipre_action_open() {
-    cd "$(<"$IPRE_CWD_FILE")" || exit 0
+    cd "$IPRE_CWD" || exit 0
     [[ $# -eq 0 || -z "$1" ]] && exit 0
     [[ $# -eq 1 && -d "$1" ]] && exit 0
 

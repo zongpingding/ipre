@@ -72,6 +72,7 @@ fi
 # Main Aux functions
 # ==========================================
 local file="$1"
+[[ -n "$file" ]] && file="${file:a}"
 local ext="${file:l:e}" # Extract lowercase extension
 local pre_opt_arg="$2"
 local is_page_mode=0
@@ -90,8 +91,8 @@ if [[ -n "$FZF_PREVIEW_COLUMNS" && -n "$FZF_PREVIEW_LINES" ]]; then
 else
     local view_size="x17"
 fi
-local cache_dir="$HOME/.cache/pre_thumbs"
-local mnt_point="$HOME/.cache/pre_thumbs/mnt"
+local cache_dir="${IPRE_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/pre_thumbs}"
+local mnt_point="$cache_dir/mnt"
 local MAX_DIR_LINES=200
 local MAX_SRC_LINES=1500
 local MAX_FIX=3
@@ -127,14 +128,17 @@ cleanup_mount() {
     fi
 }
 thumb_cache() {
-    local file="$1"
+    local file="${1:a}"
     local prefix="$2"
     local gen_cmd="$3"
     local hash_salt="$4"
 
-    local mtime key img
-    mtime=$(stat -c %Y "$file" 2>/dev/null) || return 1
-    key=$(printf "%s_%s_%s" "$file" "$mtime" "$hash_salt" | md5sum | awk '{print $1}')
+    local identity key img
+    # Follow symlinks for metadata. Preserve nanoseconds and detect replacement
+    # or same-size edits even when the modification time has been restored.
+    identity=$(stat -L -c '%d:%i:%s:%y:%z' -- "$file" 2>/dev/null) || return 1
+    # NUL-delimited fields keep filenames and rendering options unambiguous.
+    key=$(printf '%s\0' 'pre-cache-v2' "$file" "$identity" "$prefix" "$hash_salt" | md5sum | awk '{print $1}')
 
     img="$cache_dir/${prefix}_${key}.png"
     if [[ ! -f "$img" ]]; then

@@ -44,6 +44,44 @@ $ pre times.ttf
 $ pre test.epub
 ```
 
+Each `ipre` invocation keeps its own navigation, selection, and clipboard state.
+Bookmarks and the trash bin are shared between invocations.
+Each deleted item keeps its original name in the `payload/` subdirectory of a
+separate, atomically created `entry-<timestamp>.<random>` trash entry. The entry's
+`origin` file records the original absolute path, terminated by a NUL byte.
+Same-named items can be deleted together or from concurrent sessions without
+replacing one another. Restore returns items to their original directories,
+recreates missing parent directories, and adds `_restoredN` to names that already
+exist there. The restore menu displays each item's original path.
+The default listing depth is 1 (the current directory's immediate children).
+Use `--depth N` or `Alt+1` through `Alt+9` to change it. `Alt+0` or
+`--depth 0` searches without a depth limit and displays matches as they arrive;
+that mode does not apply the selected sort order or eza icons.
+
+When renaming, the prompt contains only the selected item's name. The edited
+name is relative to that item's parent directory. For example, renaming
+`/a/b/c/d.txt` to `d_modify.txt` yields `/a/b/c/d_modify.txt`; entering
+`../d_modify.txt` moves it to `/a/b/d_modify.txt`. Batch rename uses the same rule.
+Each batch rename row has a fixed `[id]`, a TAB and the editable new name.
+Source paths are shown in comments and kept separately in memory.
+Rename a directory and its children in separate batches. Batch moves
+use temporary paths beside each source and attempt to restore the original
+paths if a move fails.
+Paths are stored with reversible byte-level percent encoding, independently of
+icons and displayed names. Names containing ` -> `, TAB, newlines, percent signs
+and non-UTF-8 bytes can be selected and operated on without losing their paths.
+Name editors display `\n` for newline, `\t` for TAB and `\\` for a literal
+backslash. See [PATH_PROTOCOL.md](./PATH_PROTOCOL.md) for the record/state format.
+Legacy bookmarks are migrated to `bookmarks.paths-v1` on first use.
+
+Paste focuses the first successfully copied or moved item. Failed cut items stay
+in the clipboard for retry; successful moves are removed from it. Copy keeps its
+clipboard. Failures appear as `Paste: N failed` in the header. Pasting a directory
+into itself or one of its descendants is rejected before copying or moving it,
+including destinations reached through directory symlinks.
+A copy that fails partway through may leave partially copied files at the
+destination; it is reported as a failure and does not become the focus target.
+
 ## Config
 Configure this program by environment variables. 
 
@@ -51,7 +89,8 @@ Configure this program by environment variables.
 * set `FONT_TEXT` to change the sample text in font-preview.
 
 ## Play with (z)shell
-Add the scripts - `pre`, `ipre`, `ipre_backend` and `ipre_palette` to your PATH, and then add the following config to your `.zshrc`:
+Keep `pre`, `ipre`, `ipre_backend`, `ipre_palette` and `ipre_paths` together in a
+directory on your PATH, and then add the following config to your `.zshrc`:
 
 ```shell
 # inline (file) preview in shell
@@ -94,7 +133,7 @@ ipre <dir_1> ... <dir_n>  # search all of these directories together
 
 # add more filter to fd
 ipre -e c <dir>           # select files with extension '.c'
-ipre <dir> --maxdepth 1   # perform likes yazi
+ipre <dir> --depth 1      # list immediate children (also the default)
 ```
 
 Keybinds:
@@ -105,7 +144,7 @@ Keybinds:
   Alt+q              : Exit and CD to current viewed dir
   Enter              : Open file/directory
   [Left/Right]       : Navigate parent/child directories
-  Alt+[f/b]          : Preview window Scroll up/down
+  Alt+[f/b]          : Preview window Scroll down/up
   `(Backtick)        : Toggle File/Directory/All view
   Alt+p              : Toggle preview window
   Alt+.              : Toggle hidden files
@@ -149,4 +188,19 @@ export IPRE_FD='fd --follow -I . -E .git'
 ## WARNING
 
 * if pdf-preview does NOT work, clean the folder `~/.cache/pre_thumbs`.
-* before clear the cache folder `~/.cache/pre_thumbs`, run `umount ~/.cache/pre_thumbs/mnt` first !!!
+* before clearing `~/.cache/pre_thumbs`, unmount any remaining `mnt.*` directories from interrupted archive previews.
+
+## Tests
+
+```shell
+python3 tests/run.py
+```
+
+This checks shell syntax and runs the regression suites, including real fzf
+interaction and concurrent-session isolation. To run one area, use
+`python3 tests/run.py -k cache`. Dependencies, coverage and test isolation are
+documented in [tests/README.md](./tests/README.md).
+
+Preview thumbnails use the absolute source path, nanosecond timestamps, file
+identity and rendering options as their cache key. `pre` honors `XDG_CACHE_HOME`
+(or `IPRE_CACHE_DIR` when launched by ipre); old thumbnails need no migration.

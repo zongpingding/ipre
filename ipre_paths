@@ -1,0 +1,204 @@
+#!/usr/bin/env zsh
+
+# Shared path protocol. Functions return values in REPLY so trailing newlines
+# survive; never use command substitution to retrieve a decoded path.
+
+# Caller owns a local IPRE_INPUT_BUFFER="" for each input stream. Unlike zsh's
+# `read -d`, sysread never changes the controlling terminal's settings, which
+# would suspend an fzf reload process with SIGTTOU while fzf owns the terminal.
+ipre_stream_read() {
+    setopt localoptions nomultibyte
+    local delimiter="$1"
+    local index
+    zmodload zsh/system || return 1
+    REPLY=""
+    while true; do
+        index="${IPRE_INPUT_BUFFER[(i)$delimiter]}"
+        if (( index > 0 && index <= ${#IPRE_INPUT_BUFFER} )); then
+            REPLY+="${IPRE_INPUT_BUFFER[1,index-1]}"
+            IPRE_INPUT_BUFFER="${IPRE_INPUT_BUFFER[index+1,-1]}"
+            return 0
+        fi
+        REPLY+="$IPRE_INPUT_BUFFER"
+        IPRE_INPUT_BUFFER=""
+        # Scan each bounded chunk once, even for very long grep content lines.
+        sysread -i 0 -s 4096 IPRE_INPUT_BUFFER || return 1
+    done
+}
+
+ipre_path_encode() {
+    setopt localoptions nomultibyte
+    local value="$1" char hex
+    local i
+    REPLY=""
+    if [[ "$value" != *[^a-zA-Z0-9/._~-]* ]]; then
+        REPLY="$value"
+        return 0
+    fi
+    for (( i=1; i<=${#value}; i++ )); do
+        char="${value[i]}"
+        if [[ "$char" == [a-zA-Z0-9/._~-] ]]; then
+            REPLY+="$char"
+        else
+            printf -v hex '%02X' "'$char"
+            REPLY+="%$hex"
+        fi
+    done
+}
+
+ipre_path_decode() {
+    setopt localoptions nomultibyte
+    local value="$1" char hex
+    local i
+    REPLY=""
+    if [[ "$value" != *[^a-zA-Z0-9/._~-]* ]]; then
+        REPLY="$value"
+        return 0
+    fi
+    for (( i=1; i<=${#value}; i++ )); do
+        char="${value[i]}"
+        if [[ "$char" == '%' ]]; then
+            hex="${value[i+1,i+2]}"
+            [[ "$hex" == [0-9A-Fa-f][0-9A-Fa-f] && "$hex" != 00 ]] || return 1
+            printf -v char '%b' "\\x$hex"
+            (( i+=2 ))
+        elif [[ "$char" != [a-zA-Z0-9/._~-] ]]; then
+            return 1
+        fi
+        REPLY+="$char"
+    done
+}
+
+# Human-readable, reversible text for editors and terminal labels.
+ipre_byte_escape() {
+    setopt localoptions nomultibyte
+    local value="$1" hex result="" i
+    for (( i=1; i<=${#value}; i++ )); do
+        printf -v hex '%02X' "'${value[i]}"
+        result+="\\x$hex"
+    done
+    REPLY="$result"
+}
+
+ipre_text_escape() {
+    local value="$1" char result=""
+    local i
+    if [[ "$value" != *[^[:print:]]* && "$value" != *\\* ]]; then
+        REPLY="$value"
+        return 0
+    fi
+    for (( i=1; i<=${#value}; i++ )); do
+        char="${value[i]}"
+        case "$char" in
+            $'\\') result+='\\' ;;
+            $'\n') result+='\n' ;;
+            $'\t') result+='\t' ;;
+            $'\r') result+='\r' ;;
+            *)
+                if [[ "$char" == [[:print:]] ]]; then
+                    result+="$char"
+                else
+                    ipre_byte_escape "$char"
+                    result+="$REPLY"
+                fi
+                ;;
+        esac
+    done
+    REPLY="$result"
+}
+
+ipre_text_unescape() {
+    local value="$1" char hex
+    local i
+    REPLY=""
+    for (( i=1; i<=${#value}; i++ )); do
+        char="${value[i]}"
+        if [[ "$char" == $'\\' ]]; then
+            (( ++i ))
+            case "${value[i]}" in
+                $'\\') char=$'\\' ;;
+                n) char=$'\n' ;;
+                t) char=$'\t' ;;
+                r) char=$'\r' ;;
+                x)
+                    hex="${value[i+1,i+2]}"
+                    [[ "$hex" == [0-9A-Fa-f][0-9A-Fa-f] && "$hex" != 00 ]] || return 1
+                    printf -v char '%b' "\\x$hex"
+                    (( i+=2 ))
+                    ;;
+                *) return 1 ;;
+            esac
+        fi
+        [[ "$char" != $'\0' ]] || return 1
+        REPLY+="$char"
+    done
+}
+
+ipre_state_read_path() {
+    [[ -f "$1" ]] || { REPLY=""; return 1; }
+    ipre_saved_path_decode "$(<"$1")"
+}
+
+ipre_saved_path_decode() {
+    ipre_path_decode "$1" && [[ "$REPLY" == /* ]]
+}
+
+ipre_state_write_path() {
+    ipre_path_encode "$2"
+    printf '%s\n' "$REPLY" > "$1"
+}
+
+ipre_record_path() {
+    [[ "$1" == *$'\t'* ]] || return 1
+    ipre_saved_path_decode "${1%%$'\t'*}"
+}
+
+ipre_set_cwd() {
+    IPRE_CWD="$1"
+    ipre_state_write_path "$IPRE_CWD_FILE" "$IPRE_CWD"
+}
+
+ipre_set_focus() {
+    ipre_state_write_path "$IPRE_RAM_FOCUS_FILE" "${1:a}"
+}
+
+ipre_path_lines() {
+    local value
+    for value in "$@"; do
+        ipre_path_encode "${value:a}"
+        printf '%s\n' "$REPLY"
+    done
+}
+
+ipre_display_path() {
+    local label="$1"
+    [[ "$label" == "$IPRE_CWD/"* ]] && label="${label#"$IPRE_CWD/"}"
+    ipre_text_escape "$label"
+}
+
+ipre_emit_record() {
+    local value="${1:a}" label key icon=""
+    ipre_path_encode "$value"
+    key="$REPLY"
+    ipre_display_path "$value"
+    label="$REPLY"
+    [[ -d "$value" ]] && label+="/"
+    if [[ "$IPRE_ICONS" == 1 && "$(<"$IPRE_RAM_DEPTH_FILE")" != 0 ]]; then
+        if [[ "$IPRE_USE_LS" == 1 ]]; then
+            [[ -d "$value" ]] && icon='d ' || icon='- '
+        elif [[ -L "$value" ]]; then icon='󰡯 '
+        elif [[ -d "$value" ]]; then icon=' '
+        else
+            case "${value:l:e}" in
+                pdf) icon=' ' ;;
+                png|jpg|jpeg|gif|webp|svg) icon=' ' ;;
+                zip|gz|xz|tar|bz2) icon=' ' ;;
+                py) icon=' ' ;;
+                js|ts|jsx|tsx) icon=' ' ;;
+                sh|zsh|bash) icon=' ' ;;
+                *) icon=' ' ;;
+            esac
+        fi
+    fi
+    printf '%s\t%s%s\n' "$key" "$icon" "$label"
+}
