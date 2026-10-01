@@ -12,12 +12,23 @@ An fzf record has this format:
 
 ```text
 encoded_absolute_path<TAB>display_text<LF>
+encoded_absolute_path<TAB>display_text<TAB>metadata<TAB>link_suffix<LF>
 ```
 
-The main browser uses `--delimiter=$'\t' --with-nth=2`. The visible field contains
+The second format is used for detailed listings. The fourth field is empty for
+non-symlinks; its preceding TAB must remain so fzf can reorder fields without
+joining metadata and filename. Compact mode uses `--with-nth=2 --nth=1`;
+detailed mode uses `--with-nth=3,2,4 --nth=2`. Both use `--delimiter=$'\t'` and
+`--id-nth=1`. The display transform removes the path key, search matches only the
+filename field in the transformed display, and identity comes from the original
+encoded path. Detailed attributes have fixed widths and precede the filename;
+the escaped `-> target` suffix follows it. Automatic horizontal scrolling is
+disabled in detailed mode to preserve alignment. `reload-sync` preserves selections during a view
+change; `track-current` preserves the cursor. The filename field contains
 a relative name, optional icon/type marker, and a directory slash. Backslashes
 and control characters are visibly escaped, so neither a raw TAB nor a raw LF
 can enter that field. Display text is never decoded into an operation path.
+Metadata is also escaped, is display-only, and does not participate in search.
 Icons are chosen from file type/extension; eza/ls output is not parsed for paths.
 
 Bound commands use `{1}` or `{+1}` and declare their input with `--encoded`.
@@ -34,9 +45,10 @@ to the invocation's runtime directory. Each path value is encoded once:
 |--------------------------------------|----------------------------------------------------------|
 | CWD, focus, last previewed file      | One encoded absolute path followed by LF                 |
 | Selection, bookmarks, search roots   | One encoded absolute path per line                       |
+| Back/forward directory history       | One encoded absolute path per line; newest entry last    |
 | Clipboard                            | `COPY` or `CUT`, then one encoded absolute path per line |
-| Cached fzf list                      | Original two-field records                               |
-| Position, page, depth, sort, notices | Ordinary non-path values                                 |
+| Cached fzf list                      | Original two- or four-field records                      |
+| Position, page, depth, sort, view, notices | Ordinary non-path values                            |
 
 The shared bookmark file is `bookmarks.paths-v1`. On its first creation, existing
 literal line-based `bookmarks` are encoded without interpreting percent signs.

@@ -5,14 +5,44 @@
 # =========================================================
 
 ipre_palette_do_open() {
-    [[ $# -eq 0 ]] && return
-    local app="xdg-open"
-    [[ "$(uname)" == "Darwin" ]] && app="open"
-    
-    local i
-    for i in "$@"; do
-        "$app" "$i" > /dev/null 2>&1 &
-    done
+    ipre_open_selected system "$@"
+}
+
+ipre_palette_do_open_with() {
+    [[ $# -eq 0 || -z "$1" ]] && return 0
+    setopt localoptions localtraps
+    trap 'return 130' INT
+    enter_alt_screen
+    {
+        local choice mode specification execution
+        local -a choices=(
+            $'auto\tAutomatic (detect each file type)'
+            $'editor\tText editor'
+            $'system\tSystem default application'
+            $'image\tImage viewer'
+            $'document\tDocument viewer'
+            $'media\tMedia player'
+            $'custom\tOther program...'
+        )
+        choice=$(printf '%s\n' "${choices[@]}" | fzf --height=99% --min-height=1 --reverse \
+            --prompt 'Open with > ' --delimiter=$'\t' --with-nth=2) || return 0
+        [[ -n "$choice" ]] || return 0
+        mode="${choice%%$'\t'*}"
+        if [[ "$mode" == custom ]]; then
+            printf '%s\n' 'Enter a program and its options. Selected paths will be appended as arguments.'
+            vared -p 'Program: ' specification </dev/tty || return 0
+            [[ -n "$specification" ]] || return 0
+            execution=$(printf '%s\n' foreground background | fzf --height=99% --min-height=1 \
+                --reverse --prompt 'Run mode > ') || return 0
+            [[ "$execution" == foreground || "$execution" == background ]] || return 0
+            : > "$IPRE_NOTICE_FILE"
+            ipre_open_command "$execution" "$specification" "$@"
+        else
+            ipre_open_selected "$mode" "$@"
+        fi
+    } always {
+        leave_alt_screen
+    }
 }
 
 
@@ -327,6 +357,7 @@ ipre_action_command_palette() {
     local -a options=(
         "chmod    | [System]   Make executable (+x)"
         "open     | [System]   Open with default GUI app"
+        "openwith | [System]   Open with..."
         "shell    | [System]   Execute shell command (Block/Non-block)|Unsafe"
         "compress | [Archive]  Compress selected items"
         "extract  | [Archive]  Extract archive here"
@@ -348,6 +379,7 @@ ipre_action_command_palette() {
     case "$cmd_id" in
         chmod)    ipre_palette_do_chmod     "$@" ;;
         open)     ipre_palette_do_open      "$@" ;;
+        openwith) ipre_palette_do_open_with "$@" ;;
         shell)    ipre_palette_do_shell_cmd "$@" ;;
         compress) ipre_palette_do_compress  "$@" ;;
         extract)  ipre_palette_do_extract   "$@" ;;

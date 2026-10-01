@@ -119,6 +119,9 @@ export IPRE_RAM_DEPTH_FILE="$IPRE_RAM_DIR/ipre_fzf_depth"
 export IPRE_RAM_FOCUS_FILE="$IPRE_RAM_DIR/ipre_fzf_focus"
 export IPRE_NOTICE_FILE="$IPRE_RAM_DIR/ipre_notice"
 export IPRE_SORT_FILE="$IPRE_RAM_DIR/fzf_sort"
+export IPRE_VIEW_FILE="$IPRE_RAM_DIR/fzf_view"
+export IPRE_BACK_FILE="$IPRE_RAM_DIR/nav_back"
+export IPRE_FORWARD_FILE="$IPRE_RAM_DIR/nav_forward"
 export IPRE_FD_CMD_STR=$(printf '%q ' "${cmd[@]}")
 export IPRE_LAST_FILE="$IPRE_RAM_DIR/last_previewed_file_cached"
 export IPRE_PAGE_FILE="$IPRE_RAM_DIR/preview_page"
@@ -148,6 +151,9 @@ fi
 : > "$IPRE_CLIP_FILE"
 : > "$IPRE_NOTICE_FILE"
 : > "$IPRE_SELECT_FILE"
+: > "$IPRE_BACK_FILE"
+: > "$IPRE_FORWARD_FILE"
+printf 'compact\n' > "$IPRE_VIEW_FILE"
 echo "all"              > "$IPRE_STATE_FILE"
 echo "true"             > "$IPRE_HIDDEN_FILE"
 echo "name"             > "$IPRE_SORT_FILE"
@@ -173,6 +179,7 @@ local -a fzf_binds=(
     "\`:reload(\"$BACKEND_CMD\" ipre_action_switch)"
     "alt-.:execute-silent(\"$BACKEND_CMD\" ipre_action_hidden)+reload(\"$BACKEND_CMD\" ipre_action_run)"
     "alt-o:execute-silent(\"$BACKEND_CMD\" ipre_action_sort_cycle)+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    "alt-e:track-current+transform(\"$BACKEND_CMD\" ipre_action_toggle_view)+reload-sync(\"$BACKEND_CMD\" ipre_action_run)"
     # depth control
     "alt-1:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth 1)+reload(\"$BACKEND_CMD\" ipre_action_run)"
     "alt-2:execute-silent(\"$BACKEND_CMD\" ipre_action_set_depth 2)+reload(\"$BACKEND_CMD\" ipre_action_run)"
@@ -191,6 +198,8 @@ local -a fzf_binds=(
     #####     Entry list navigation     #####
     "left:transform:\"$BACKEND_CMD\" ipre_action_left"
     "right:reload(\"$BACKEND_CMD\" ipre_action_right --encoded {1})+clear-query"
+    "f2:transform:\"$BACKEND_CMD\" ipre_action_history_back"
+    "f3:transform:\"$BACKEND_CMD\" ipre_action_history_forward"
 
     #####     Dynamic Smart Scroll (Page flip for PDF, Native scroll for Code)    #####
     "alt-f:transform(\"$BACKEND_CMD\" ipre_action_smart_scroll --encoded down {1})"
@@ -227,13 +236,13 @@ local -a fzf_binds=(
     "result:transform:\"$BACKEND_CMD\" ipre_action_focus_position"
 )
 if [[ $keep_open -eq 1 ]]; then
-    fzf_binds+=("enter:execute(\"$BACKEND_CMD\" ipre_action_open --encoded {+1})")
+    fzf_binds+=("enter:execute(\"$BACKEND_CMD\" ipre_action_open --encoded {+1})+transform-header(\"$BACKEND_CMD\" ipre_action_header_info --encoded {1})")
 fi
 
 # fzf UI arguments & fzf arguments finalize
 local -a fzf_args=(
     --multi
-    --delimiter=$'\t' --with-nth=2
+    --delimiter=$'\t' --with-nth=2 --nth=1 --id-nth=1 --hscroll
     --prompt "ipre > "
     --preview "\"$BACKEND_CMD\" ipre_action_preview_with_page --encoded {1} 2>/dev/null"
     --height=50% --reverse
@@ -292,10 +301,4 @@ if [[ ${#abs_items[@]} -eq 1 && -d "$first_file" ]]; then
     fi
     exit 0
 fi
-local ext="${first_file:l:e}"
-case "$ext" in
-    png|jpg|jpeg|gif|webp|bmp|tiff) imv "${abs_items[@]}" &>/dev/null &! ;;
-    pdf|djvu|epub|mobi) zathura "${abs_items[@]}" &>/dev/null &! ;;
-    tar|gz|tgz|xz|txz|bz2|tbz2|zip) exit 0 ;;
-    *) ${EDITOR:-nvim} "${abs_items[@]}" ;;
-esac
+"$BACKEND_CMD" ipre_action_open -- "${abs_items[@]}"

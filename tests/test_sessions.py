@@ -59,6 +59,9 @@ class SessionTests(IpreTestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
 
             action(first, "ipre_action_right", "--encoded", path_key(sessions[0][2] / "nested"))
+            action(first, "ipre_action_toggle_view")
+            action(first, "ipre_action_history_back")
+            action(first, "ipre_action_history_forward")
             action(first, "ipre_action_cut", "--encoded", path_key(sessions[0][2] / "source.txt"))
             action(first, "ipre_action_switch")
             action(first, "ipre_action_hidden")

@@ -21,7 +21,7 @@ file_type_assert() {
     local file="$1"
     local keyword="$2"
     local mapped_type="$3"
-    if file --mime-type -b "$file" 2>/dev/null | grep -qi "$keyword"; then
+    if file --mime-type -L -b -- "$file" 2>/dev/null | grep -qi "$keyword"; then
         echo "$mapped_type"
         return 0
     fi
@@ -29,7 +29,8 @@ file_type_assert() {
 }
 get_file_type() {
     local file="$1"
-    local ext="$2"
+    local ext="${2:-${file:l:e}}"
+    [[ -d "$file" ]] && { echo directory; return; }
     # 1. Fast path: Match by extension
     case "$ext" in
         txt|md|org|json|yaml|yml|log|hs|r|c|cc|cpp|h|hh|py|sh|zsh|el|tex|sty|cls|dtx) echo "text" ; return ;;
@@ -40,6 +41,7 @@ get_file_type() {
         epub|mobi) echo "epmo" ; return ;;
         ttf|otf|ttc|otc|woff|woff2) echo "font" ; return ;;
         mp4|mkv|mov|mpv|avi|wmv|flv|webm|ts|m2ts|vob|3gp) echo "video" ; return ;;
+        mp3|flac|wav|ogg|opus|m4a|aac|aiff) echo "audio" ; return ;;
         tar|gz|tgz|xz|txz|bz2|tbz2) echo "archive" ; return ;;
         zip) echo "zip" ; return ;;
     esac
@@ -50,7 +52,10 @@ get_file_type() {
     file_type_assert    "$file" "mobi"                "epmo"     &&  return
     file_type_assert    "$file" "x-portable-pixmap"   "ppm"      &&  return # must before 'image' assert
     file_type_assert    "$file" "image"               "image"    &&  return
+    file_type_assert    "$file" "video"               "video"    &&  return
+    file_type_assert    "$file" "audio"               "audio"    &&  return
     file_type_assert    "$file" "text"                "text"     &&  return
+    file_type_assert    "$file" "json\|xml\|empty"    "text"     &&  return
     file_type_assert    "$file" "executable"          "binary"   &&  return
     file_type_assert    "$file" "font"                "font"     &&  return
     file_type_assert    "$file" "gzip"                "archive"  &&  return

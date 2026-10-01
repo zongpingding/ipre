@@ -22,7 +22,8 @@ Standard discovery also works: `python3 -m unittest discover -s tests -v`.
 
 Use Linux, Python 3 and zsh, with bash, fd, fzf, ripgrep, file and GNU coreutils
 installed. No Python packages, editor, graphical display or PDF renderer are
-required. Run as a regular user: tests of directory write permissions are skipped
+required. fzf must support `--id-nth` and `reload-sync` for view changes that retain
+selection. Run as a regular user: tests of directory write permissions are skipped
 as root. Some tests require a working PTY; run outside containers that prohibit
 PTY creation. Individual suites may skip tests when fd/fzf/rg are unavailable;
 the full runner requires these tools. Check the summary for skipped tests.
@@ -38,6 +39,9 @@ manual fixtures and are neither used nor removed by this suite.
 | Suite | Checks |
 | --- | --- |
 | `test_browser.py` | Listing, navigation, depth parsing, frontend selection, real fzf keys/reload |
+| `test_history.py` | Back/forward, new visits, deleted directories, bookmark visits and buffer preservation |
+| `test_details.py` | Aligned attributes in real fzf, Unicode names, large sizes, filename-only search and operation identity |
+| `test_open.py` | Shared Enter/palette dispatch, mixed types, extensionless MIME detection, custom argv and cancellation |
 | `test_sessions.py` | Two simultaneous frontends, independent state, cleanup while the other stays open |
 | `test_paths.py` | Byte-preserving encoding, invalid input, stream boundaries |
 | `test_buffers.py` | Bookmarks, selection and buffer editing |
@@ -53,6 +57,10 @@ commands while running `pre` itself. The concurrency test holds two real
 frontends open with a controlled fzf replacement; other tests exercise real fzf.
 Injected move/copy failures let tests verify that original data and retry state
 survive failures without relying on timing or hardware faults.
+The browser interaction test sends real `Alt+e`, `F2` and `F3` keys and checks
+that multi-selection survives the switch to detailed view and filename search
+survives switching back and forth. Opener tests record
+arguments with temporary mock applications; they do not launch desktop apps.
 
 When fixing a bug, add a regression to the relevant suite. Prefer observable
 files, state, command arguments and terminal output over assertions about source

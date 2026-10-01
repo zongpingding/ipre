@@ -154,8 +154,16 @@ ipre_record_path() {
 }
 
 ipre_set_cwd() {
-    IPRE_CWD="$1"
-    ipre_state_write_path "$IPRE_CWD_FILE" "$IPRE_CWD"
+    local destination="${1:a}" previous="$IPRE_CWD"
+    [[ -d "$destination" && -x "$destination" ]] || return 1
+    [[ "$destination" == "$previous" ]] && return 0
+    ipre_state_write_path "$IPRE_CWD_FILE" "$destination" || return 1
+    IPRE_CWD="$destination"
+    if [[ "$IPRE_HISTORY_REPLAY" != 1 && -n "$IPRE_BACK_FILE" && -n "$previous" ]]; then
+        ipre_path_lines "$previous" >> "$IPRE_BACK_FILE"
+        : > "$IPRE_FORWARD_FILE"
+    fi
+    return 0
 }
 
 ipre_set_focus() {
@@ -200,5 +208,9 @@ ipre_emit_record() {
             esac
         fi
     fi
-    printf '%s\t%s%s\n' "$key" "$icon" "$label"
+    printf '%s\t%s%s' "$key" "$icon" "$label"
+    # Keep the metadata delimiter even without a link target: fzf includes it
+    # when moving field 3 before the filename with --with-nth=3,2,4.
+    [[ -n "$2" ]] && printf '\t%s\t%s' "$2" "$3"
+    printf '\n'
 }

@@ -168,7 +168,9 @@ ipre_action_border_status() {
     # help info
     local help_info="$(printf '[%b%s%b]' "$C_GRN" "HELP:M+?|ESC:C-g" "$C_RST")"
 
-    printf '%s%s%s%s%s%s' "$help_info" "$git_str" "$sort_str" "$depth_str" "$clip_str" "$entry_mode_cwd"
+    local view=compact
+    [[ -f "$IPRE_VIEW_FILE" ]] && view="$(<"$IPRE_VIEW_FILE")"
+    printf '%s%s%s[View:%s]%s%s%s' "$help_info" "$git_str" "$sort_str" "$view" "$depth_str" "$clip_str" "$entry_mode_cwd"
 }
 
 ipre_action_header_info() {
@@ -197,12 +199,56 @@ ipre_action_header_info() {
 
 
 #####     list entry(kernel)     #####
+ipre_action_toggle_view() {
+    [[ -n "$IPRE_VIEW_FILE" ]] || return 1
+    if [[ "$(<"$IPRE_VIEW_FILE")" == detailed ]]; then
+        printf 'compact\n' > "$IPRE_VIEW_FILE"
+        printf 'change-nth(1)+change-with-nth(2)+toggle-hscroll'
+    else
+        printf 'detailed\n' > "$IPRE_VIEW_FILE"
+        printf 'change-nth(2)+change-with-nth(3,2,4)+toggle-hscroll'
+    fi
+    return 0
+}
+
+# Metadata is display-only. The first field always remains the encoded path.
+ipre_listing_record() {
+    local details="" suffix="" stamp permissions kind size
+    local -A metadata=()
+    if [[ "$listing_view" == detailed ]]; then
+        if zstat -L -H metadata -- "$1" 2>/dev/null; then
+            printf -v permissions '%04o' "$(( metadata[mode] & 8#7777 ))"
+            strftime -s stamp '%Y-%m-%d %H:%M' "${metadata[mtime]}"
+            kind=file; size="${metadata[size]} B"
+            if [[ -L "$1" ]]; then
+                [[ -e "$1" ]] && kind=link || kind=broken-link
+            elif [[ -d "$1" ]]; then
+                kind=dir; size='-'
+            fi
+            # 19 decimal digits plus " B" cover a signed 64-bit file size.
+            printf -v details '%-11s %4s %21s %16s' "$kind" "$permissions" "$size" "$stamp"
+            if [[ -L "$1" ]]; then
+                ipre_text_escape "${metadata[link]}"
+                suffix="-> $REPLY"
+            fi
+        else
+            printf -v details '%-11s %4s %21s %16s' unavailable '?' '?' '?'
+        fi
+    fi
+    ipre_emit_record "$1" "$details" "$suffix"
+}
+
 # fd supplies lossless paths. Presentation is built separately from those paths.
 ipre_listing_records() {
     cd -- "$IPRE_CWD" || return 1
     local run_cmd="$IPRE_FD_CMD_STR --print0 --color=never"
     local state="$(<"$IPRE_STATE_FILE")" depth="$(<"$IPRE_RAM_DEPTH_FILE")"
     local sort_mode="$(<"$IPRE_SORT_FILE")" value quoted record label priority key IPRE_INPUT_BUFFER=""
+    local listing_view=compact
+    [[ -f "$IPRE_VIEW_FILE" ]] && listing_view="$(<"$IPRE_VIEW_FILE")"
+    if [[ "$listing_view" == detailed ]]; then
+        zmodload zsh/stat && zmodload zsh/datetime || return 1
+    fi
     local -a targets=("${(@f)$(<"$IPRE_TARGETS_FILE")}") sort_args=()
     [[ "$(<"$IPRE_HIDDEN_FILE")" == true ]] && run_cmd+=' --hidden'
     [[ "$depth" == <-> && "$depth" -gt 0 ]] && run_cmd+=" --max-depth $depth"
@@ -221,7 +267,7 @@ ipre_listing_records() {
         eval "$run_cmd" 2>/dev/null | while ipre_stream_read $'\0'; do
             value="$REPLY"
             [[ "$state" == file && -d "$value" ]] && continue
-            ipre_emit_record "$value"
+            ipre_listing_record "$value"
         done
         return 0
     fi
@@ -250,7 +296,7 @@ ipre_listing_records() {
                 *) key="$label" ;;
             esac
             printf '%s\t%s\t%s\t' "$priority" "$key" "$label"
-            ipre_emit_record "$value"
+            ipre_listing_record "$value"
         done
     } | LC_ALL=C sort "${sort_args[@]}" | cut -f4-
 }
@@ -400,6 +446,37 @@ ipre_action_hidden() {
 
 
 #####     Entry list navigation     #####
+ipre_history_visit() {
+    local stack_file="$1" other_file="$2" current="$IPRE_CWD" destination
+    local IPRE_HISTORY_REPLAY=1
+    local -a entries=()
+    [[ -s "$stack_file" ]] || return 0
+    entries=("${(@f)$(<"$stack_file")}")
+    while (( ${#entries} )); do
+        destination="${entries[-1]}"
+        entries[-1]=()
+        : > "$stack_file"
+        (( ${#entries} )) && printf '%s\n' "${entries[@]}" > "$stack_file"
+        ipre_saved_path_decode "$destination" || continue
+        destination="$REPLY"
+        [[ "$destination" == "$current" ]] && continue
+        ipre_set_cwd "$destination" || continue
+        ipre_path_lines "$current" >> "$other_file"
+        printf 'all\n' > "$IPRE_STATE_FILE"
+        : > "$IPRE_TARGETS_FILE"
+        : > "$IPRE_RAM_POS_FILE"
+        rm -f -- "$IPRE_RAM_FOCUS_FILE"
+        [[ "${current:h}" == "$destination" && -d "$current" ]] && ipre_set_focus "$current"
+        printf 'clear-query+'
+        ipre_action_refresh_and_focus
+        return 0
+    done
+    return 0
+}
+
+ipre_action_history_back() { ipre_history_visit "$IPRE_BACK_FILE" "$IPRE_FORWARD_FILE"; }
+ipre_action_history_forward() { ipre_history_visit "$IPRE_FORWARD_FILE" "$IPRE_BACK_FILE"; }
+
 ipre_focus_line() {
     local target="$(<"$IPRE_RAM_FOCUS_FILE")" line key number=0
     REPLY=""
@@ -445,7 +522,7 @@ ipre_action_left() {
     local cur="$IPRE_CWD" parent="${IPRE_CWD:h}"
     [[ -z "$parent" ]] && parent=/
     if [[ "$cur" != "$parent" ]]; then
-        ipre_set_cwd "$parent"
+        ipre_set_cwd "$parent" || return 1
         ipre_set_focus "$cur"
     fi
     printf 'all\n' > "$IPRE_STATE_FILE"
@@ -457,7 +534,8 @@ ipre_action_right() {
     cd -- "$IPRE_CWD" || return 1
     if [[ -n "$ITEM" ]]; then
         local target="${ITEM:a}"
-        [[ -d "$target" ]] && ipre_set_cwd "$target" || ipre_set_cwd "${target:h}"
+        [[ -d "$target" ]] || target="${target:h}"
+        ipre_set_cwd "$target" || return 1
     fi
     printf 'all\n' > "$IPRE_STATE_FILE"
     : > "$IPRE_TARGETS_FILE"
@@ -1050,7 +1128,11 @@ ipre_action_jump_from_list() {
     [[ -n "$selected" ]] || return 1
     ipre_record_path "$selected" || return 1
     value="$REPLY"
-    [[ -d "$value" ]] && ipre_set_cwd "$value" || ipre_set_cwd "${value:h}"
+    if [[ -d "$value" ]]; then
+        ipre_set_cwd "$value" || return 1
+    else
+        ipre_set_cwd "${value:h}" || return 1
+    fi
     [[ ! -d "$value" ]] && ipre_set_focus "$value"
     printf 'all\n' > "$IPRE_STATE_FILE"
     : > "$IPRE_TARGETS_FILE"
@@ -1421,7 +1503,7 @@ ipre_action_live_grep() {
         (( ${#unique_keys[@]} )) || return 0
         ipre_saved_path_decode "${unique_keys[1]}" || return 1
         filepath="$REPLY"
-        ipre_set_cwd "${filepath:h}"
+        ipre_set_cwd "${filepath:h}" || return 1
         ipre_set_focus "$filepath"
         printf 'all\n' > "$IPRE_STATE_FILE"
         : > "$IPRE_TARGETS_FILE"
@@ -1457,7 +1539,7 @@ ipre_action_zoxide() {
     leave_alt_screen
 
     if [[ -n "$selected" ]] && ipre_record_path "$selected" && [[ -d "$REPLY" ]]; then
-        ipre_set_cwd "$REPLY"
+        ipre_set_cwd "$REPLY" || return 1
         echo 'all' > "$IPRE_STATE_FILE"
         printf "" > "$IPRE_TARGETS_FILE"
         # Explicitly clear RAM focus to avoid jumping to a non-existent file in the new directory
@@ -1483,6 +1565,8 @@ ipre_action_help() {
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+q"         "$C_RST" "Exit and CD to current viewed dir"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Enter"         "$C_RST" "Open file/directory"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "[Left/Right]"  "$C_RST" "Navigate parent/child directories"
+    printf "  %b%-18s%b : %s\n" "$C_YLW" "F2/F3"         "$C_RST" "Directory history back/forward"
+    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+e"         "$C_RST" "Toggle(Expand) compact/detailed listing"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+[f/b]"     "$C_RST" "Preview window Scroll up/down"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "\`(Backtick)"  "$C_RST" "Toggle File/Directory/All view"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+p"         "$C_RST" "Toggle preview window"
@@ -1515,19 +1599,110 @@ ipre_action_help() {
 
 
 #####     ipre post action config     #####
-ipre_action_open() {
-    cd "$IPRE_CWD" || exit 0
-    [[ $# -eq 0 || -z "$1" ]] && exit 0
-    [[ $# -eq 1 && -d "$1" ]] && exit 0
+ipre_open_error() {
+    ipre_text_escape "$1"
+    [[ -n "$IPRE_NOTICE_FILE" ]] && printf 'Open: %s\n' "$REPLY" > "$IPRE_NOTICE_FILE"
+    printf 'Open: %s\n' "$REPLY" >&2
+}
 
-    local first_file="$1"
-    local ext="${first_file:l:e}"
-    case "$ext" in
-        png|jpg|jpeg|gif|webp|bmp|tiff) nohup imv "$@" >/dev/null 2>&1 & ;;
-        pdf|djvu|epub|mobi) nohup zathura "$@" >/dev/null 2>&1 & ;;
-        tar|gz|tgz|xz|txz|bz2|tbz2|zip) ;;
-        *) ${EDITOR:-nvim} "$@" </dev/tty>/dev/tty ;;
-    esac
+# Command specifications are tokenized into argv; file paths are never shell code.
+ipre_open_command() {
+    local execution="$1" specification="$2"
+    shift 2
+    local -a command_args=("${(@Q)${(z)specification}}")
+    if (( ! ${#command_args} )) || ! command -v -- "${command_args[1]}" >/dev/null 2>&1; then
+        ipre_open_error "program unavailable: ${command_args[1]:-(empty command)}"
+        return 1
+    fi
+    if [[ "$execution" == background ]]; then
+        nohup "${command_args[@]}" "$@" >/dev/null 2>&1 &!
+    else
+        local result
+        if [[ -t 1 ]]; then
+            "${command_args[@]}" "$@" </dev/tty >/dev/tty
+        else
+            "${command_args[@]}" "$@"
+        fi
+        result=$?
+        if (( result )); then
+            ipre_open_error "${command_args[1]} exited with status $result"
+            return "$result"
+        fi
+    fi
+    return 0
+}
+
+# Shared by Enter, --keep-open and the command palette.
+ipre_open_selected() {
+    local mode="$1" item type failed=0
+    shift
+    [[ -n "$IPRE_NOTICE_FILE" ]] && : > "$IPRE_NOTICE_FILE"
+    local -a texts=() images=() documents=() media=() system_items=() valid=()
+    for item in "$@"; do
+        [[ -n "$item" ]] || continue
+        item="${item:a}"
+        if [[ ! -e "$item" ]]; then
+            ipre_open_error "path unavailable: $item"
+            failed=1
+            continue
+        fi
+        valid+=("$item")
+        [[ "$mode" == auto ]] || continue
+        type=$(pre get_file_type "$item" 2>/dev/null) || type=unknown
+        case "$type" in
+            text) texts+=("$item") ;;
+            image|ppm) images+=("$item") ;;
+            pdf|djvu|epmo) documents+=("$item") ;;
+            audio|video) media+=("$item") ;;
+            *) system_items+=("$item") ;;
+        esac
+    done
+    (( ${#valid} )) || return "$failed"
+    local system_opener="${IPRE_SYSTEM_OPENER}"
+    if [[ -z "$system_opener" ]]; then
+        [[ "$OSTYPE" == darwin* ]] && system_opener=open || system_opener=xdg-open
+    fi
+    if [[ "$mode" != auto ]]; then
+        case "$mode" in
+            editor) ipre_open_command foreground "${EDITOR:-nvim}" "${valid[@]}" || failed=1 ;;
+            image) ipre_open_command background "${IPRE_IMAGE_OPENER:-imv}" "${valid[@]}" || failed=1 ;;
+            media) ipre_open_command background "${IPRE_MEDIA_OPENER:-mpv}" "${valid[@]}" || failed=1 ;;
+            document|system)
+                local opener="$system_opener"
+                [[ "$mode" == document ]] && opener="${IPRE_DOCUMENT_OPENER:-zathura}"
+                for item in "${valid[@]}"; do
+                    ipre_open_command background "$opener" "$item" || failed=1
+                done
+                ;;
+            *) ipre_open_error "unknown opening mode: $mode"; failed=1 ;;
+        esac
+        return "$failed"
+    fi
+    # Image/media programs accept groups; document and system handlers get one
+    # path per process. Mixed selections are classified independently.
+    if (( ${#images} )); then
+        ipre_open_command background "${IPRE_IMAGE_OPENER:-imv}" "${images[@]}" || failed=1
+    fi
+    for item in "${documents[@]}"; do
+        ipre_open_command background "${IPRE_DOCUMENT_OPENER:-zathura}" "$item" || failed=1
+    done
+    if (( ${#media} )); then
+        ipre_open_command background "${IPRE_MEDIA_OPENER:-mpv}" "${media[@]}" || failed=1
+    fi
+    for item in "${system_items[@]}"; do
+        ipre_open_command background "$system_opener" "$item" || failed=1
+    done
+    if (( ${#texts} )); then
+        ipre_open_command foreground "${EDITOR:-nvim}" "${texts[@]}" || failed=1
+    fi
+    return "$failed"
+}
+
+ipre_action_open() {
+    cd -- "$IPRE_CWD" || return 1
+    [[ $# -eq 0 || -z "$1" ]] && return 0
+    [[ $# -eq 1 && -d "$1" ]] && return 0
+    ipre_open_selected auto "$@"
 }
 
 

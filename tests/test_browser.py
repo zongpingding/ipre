@@ -110,17 +110,41 @@ class BrowserTests(IpreTestCase):
         try:
             until(lambda: b"victimarrow" in output)
             state = next((self.root / "runtime").iterdir())
+            os.write(master, b"\x1ba\x1be")  # Select both, then change their display fields.
+            until(lambda: (state / "fzf_view").read_text() == "detailed\n"
+                  and b"View:detailed" in output)
+            os.write(master, b"\x1bc")
+            until(lambda: len((state / "fzf_clip").read_text().splitlines()) == 3)
+            self.assertEqual(set((state / "fzf_clip").read_text().splitlines()[1:]),
+                             {path_key(source), path_key(destination)})
             os.write(master, b"victimarrow")
             until(lambda: highlighted(source))
+            for view in ("compact", "detailed"):
+                output.clear()
+                os.write(master, b"\x1be")
+                until(lambda: (state / "fzf_view").read_text() == view + "\n"
+                      and ("View:" + view).encode() in output and b"1/2" in output)
+                self.assertTrue(highlighted(source))
             os.write(master, b"\x1bx")
             expected = f"CUT\n{path_key(source)}\n"
             until(lambda: (state / "fzf_clip").read_text() == expected)
             os.write(master, b"\x15destination")
             until(lambda: highlighted(destination))
+            output.clear()
             os.write(master, b"\x1b[C")
-            until(lambda: b"Empty directory / No matches" in output)
+            until(lambda: (state / "fzf_cwd").read_text() == path_key(destination) + "\n"
+                  and b"Empty directory / No matches" in output)
             self.assertEqual((state / "fzf_cwd").read_text(), path_key(destination) + "\n")
             self.assertEqual((state / "ipre_fzf_list").read_text(), "")
+            output.clear()
+            os.write(master, b"\x1bOQ")  # F2: back
+            until(lambda: (state / "fzf_cwd").read_text() == path_key(self.cwd) + "\n"
+                  and highlighted(destination) and b"2/2" in output)
+            output.clear()
+            os.write(master, b"\x1bOR")  # F3: forward
+            until(lambda: (state / "fzf_cwd").read_text() == path_key(destination) + "\n"
+                  and b"Empty directory / No matches" in output)
+            self.assertEqual((state / "fzf_cwd").read_text(), path_key(destination) + "\n")
             os.write(master, b"\x1bv")
             until(lambda: b"Paste: 1 failed" in output)
             self.assertEqual((state / "fzf_clip").read_text(), expected)

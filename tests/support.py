@@ -57,6 +57,9 @@ class IpreTestCase(unittest.TestCase):
             "RAM_POS": "",
             "NOTICE": "",
             "BOOKMARKS": "",
+            "VIEW": "compact",
+            "BACK": "",
+            "FORWARD": "",
         }
         # Keep each test independent of the invoking ipre session and fzf config.
         self.env = {key: value for key, value in os.environ.items()
