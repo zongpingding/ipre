@@ -21,7 +21,7 @@ if [[ -n "$IPRE_FD" ]]; then
 else
     cmd=(
         fd --follow
-	-I # do NOT follow .gitignore etc
+        -I # do NOT follow .gitignore etc
         # -E .git -E .cargo -E .npm -E .cache
         # -E .java -E .gradle -E .nuget -E .steam -E .android
         # -E .ipython -E .vscode -E .vscode-oss -E .oh-my-zsh
@@ -79,6 +79,7 @@ fi
 export IPRE_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/pre_thumbs"
 export IPRE_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/ipre"
 export IPRE_TRASH_DIR="$IPRE_DATA_DIR/.trash"
+export IPRE_COMMAND_HISTORY_FILE="$IPRE_DATA_DIR/commands.history-v1"
 export IPRE_RAM_DIR="${XDG_RUNTIME_DIR:-/dev/shm}/ipre_$$"
 mkdir -p "$IPRE_CACHE_DIR" "$IPRE_DATA_DIR" "$IPRE_RAM_DIR" "$IPRE_TRASH_DIR"
 
@@ -154,6 +155,7 @@ fi
 : > "$IPRE_BACK_FILE"
 : > "$IPRE_FORWARD_FILE"
 printf 'compact\n' > "$IPRE_VIEW_FILE"
+printf 'right 50\n' > "$IPRE_RAM_DIR/preview_geometry"
 echo "all"              > "$IPRE_STATE_FILE"
 echo "true"             > "$IPRE_HIDDEN_FILE"
 echo "name"             > "$IPRE_SORT_FILE"
@@ -171,6 +173,9 @@ local -a fzf_binds=(
     "esc:ignore"
     "ctrl-q:abort"
     'alt-p:toggle-preview'
+    "f4:transform:\"$BACKEND_CMD\" ipre_action_preview_geometry shrink"
+    "f5:transform:\"$BACKEND_CMD\" ipre_action_preview_geometry grow"
+    "f6:transform:\"$BACKEND_CMD\" ipre_action_preview_geometry toggle"
     "resize:refresh-preview"
     "focus:transform-header(\"$BACKEND_CMD\" ipre_action_header_info --encoded {1})+transform-border-label(\"$BACKEND_CMD\" ipre_action_border_status)"
     "load:transform-header(\"$BACKEND_CMD\" ipre_action_header_info --encoded {1})+transform-border-label(\"$BACKEND_CMD\" ipre_action_border_status)+transform(\"$BACKEND_CMD\" ipre_action_focus_position)"
@@ -228,7 +233,7 @@ local -a fzf_binds=(
     "alt-/:execute(\"$BACKEND_CMD\" ipre_action_open_bookmarks)+reload(\"$BACKEND_CMD\" ipre_action_run)+clear-query"
     "alt-g:execute(\"$BACKEND_CMD\" ipre_action_live_grep)+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
     "alt-t:execute(\"$BACKEND_CMD\" ipre_action_zoxide)+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
-    "alt-space:execute(\"$BACKEND_CMD\" ipre_action_command_palette --encoded {+1})+reload(\"$BACKEND_CMD\" ipre_action_run)"
+    "alt-space:execute(\"$BACKEND_CMD\" ipre_action_command_palette --encoded {+1})+transform:\"$BACKEND_CMD\" ipre_action_refresh_and_focus"
 
     #####     ipre post action config     #####
     "alt-q:execute-silent(echo 1 > '$IPRE_FORCE_CD_FILE')+abort"

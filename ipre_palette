@@ -166,11 +166,167 @@ ipre_palette_do_chmod() {
     chmod +x "$@"
 }
 
+ipre_palette_do_symlink() {
+    [[ $# -gt 0 && -n "$1" ]] || return 0
+    cd -- "$IPRE_CWD" || return 1
+    setopt localoptions localtraps
+    trap 'return 130' INT
+    enter_alt_screen
+    {
+        print_title "Create Symbolic Links"
+        printf '%s\n' 'Enter each link path; clear input to skip. Existing paths are never replaced.'
+        printf '%s\n' 'Path escapes: \n for newline, \t for TAB, \\ for backslash.'
+        local item link_name destination first_link="" failed=0
+        for item in "$@"; do
+            item="${item:a}"
+            [[ -e "$item" || -L "$item" ]] || continue
+            printf 'Target: %s\n' "$(print_label "$item")"
+            ipre_text_escape "$IPRE_CWD/${item:t}.lnk"
+            link_name="$REPLY"
+            vared -p 'Link path: ' link_name </dev/tty || break
+            [[ -n "$link_name" ]] || continue
+            if ! ipre_text_unescape "$link_name"; then
+                print_warn "Invalid path escape."
+                failed=1
+                continue
+            fi
+            destination="${REPLY:a}"
+            if ! mkdir -p -- "${destination:h}" || ! ln -sT -- "$item" "$destination"; then
+                failed=1
+                continue
+            fi
+            [[ -n "$first_link" ]] || first_link="$destination"
+        done
+        [[ -n "$first_link" ]] && ipre_set_focus "$first_link"
+        printf 'Press any key to return...'
+        read -k 1 -s _ </dev/tty
+        (( failed == 0 ))
+    } always {
+        leave_alt_screen
+    }
+}
+
+ipre_palette_do_copy_content() {
+    [[ $# -gt 0 && -n "$1" ]] || return 0
+    cd -- "$IPRE_CWD" || return 1
+    local item failed=0
+    local -a clipboard_cmd=("${(@Q)${(z)${CLIPBOARD:-wl-copy}}}")
+    # Validate every input before touching the clipboard, including directories.
+    for item in "$@"; do
+        if [[ ! -f "$item" || ! -r "$item" ]]; then
+            ipre_text_escape "$item"
+            printf 'Clipboard: not a readable file: %s\n' "$REPLY" > "$IPRE_NOTICE_FILE"
+            return 1
+        fi
+    done
+    if ! command -v -- "${clipboard_cmd[1]}" >/dev/null 2>&1; then
+        printf 'Clipboard: program unavailable\n' > "$IPRE_NOTICE_FILE"
+        return 1
+    fi
+    # Stream bytes directly: no command substitution, separators or newline loss.
+    setopt localoptions pipefail
+    cat -- "$@" | "${clipboard_cmd[@]}" || failed=1
+    if (( failed )); then
+        printf 'Clipboard: failed to copy file contents\n' > "$IPRE_NOTICE_FILE"
+    else
+        printf 'Clipboard: copied contents of %d file(s)\n' "$#" > "$IPRE_NOTICE_FILE"
+    fi
+    return "$failed"
+}
+
+ipre_command_history_path() {
+    REPLY="${IPRE_COMMAND_HISTORY_FILE:-${IPRE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/ipre}/commands.history-v1}"
+}
+
+ipre_command_history_save() {
+    [[ -n "$1" ]] || return 0
+    ipre_command_history_path
+    local history_file="$REPLY"
+    mkdir -p -- "${history_file:h}" || return 1
+    ipre_text_escape "$1"
+    (umask 077; printf '%s\n' "$REPLY" >> "$history_file")
+}
+
+# The command is intentional shell code; selected paths are positional arguments.
+ipre_command_run_selected() {
+    local mode="$1" command_text="$2" item failed=0
+    shift 2
+    case "$mode" in
+        all) zsh -c "$command_text" ipre-command "$@" || failed=1 ;;
+        each)
+            for item in "$@"; do
+                zsh -c "$command_text" ipre-command "$item" || failed=1
+            done
+            ;;
+        *) return 1 ;;
+    esac
+    return "$failed"
+}
+
+ipre_palette_do_history_cmd() {
+    [[ $# -gt 0 && -n "$1" ]] || return 0
+    cd -- "$IPRE_CWD" || return 1
+    setopt localoptions localtraps
+    trap 'return 130' INT
+    local command_tty_state
+    command_tty_state=$(stty -g </dev/tty) || return 1
+    # fzf/ZLE may leave output processing disabled; commands need LF -> CRLF.
+    stty opost onlcr </dev/tty || return 1
+    enter_alt_screen
+    {
+        ipre_command_history_path
+        local history_file="$REPLY" selected id line cmd_str mode result=0
+        local -a entries=() choices=() history_commands=()
+        local -A seen=()
+        [[ -f "$history_file" ]] && entries=("${(@f)$(<"$history_file")}")
+        for (( id=${#entries}; id>=1; id-- )); do
+            line="${entries[id]}"
+            [[ -n "$line" && -z "${seen[$line]}" ]] || continue
+            ipre_text_unescape "$line" || continue
+            seen[$line]=1
+            history_commands+=("$REPLY")
+            choices+=("${#history_commands}"$'\t'"$line")
+        done
+        if (( ! ${#history_commands} )); then
+            print_warn "No ipre command history. Execute a shell command from the palette first."
+            printf 'Press any key to return...'
+            read -k 1 -s _ </dev/tty
+            return 0
+        fi
+        selected=$(printf '%s\n' "${choices[@]}" | fzf --height=99% --min-height=1 --reverse \
+            --scheme=history --no-sort --delimiter=$'\t' --with-nth=2 --prompt 'Command history > ') || return 0
+        id="${selected%%$'\t'*}"
+        [[ "$id" == <-> ]] && (( id>=1 && id<=${#history_commands} )) || return 1
+        cmd_str="${history_commands[id]}"
+        [[ "$cmd_str" == *'"$@"'* ]] || cmd_str+=' "$@"'
+        printf '%s\n' 'Edit the command and remove old file arguments if needed.'
+        printf '%s\n' 'Place "$@" where the selected paths belong, including within pipelines.'
+        vared -p 'Command: ' cmd_str </dev/tty || return 0
+        [[ -n "$cmd_str" ]] || return 0
+        selected=$(printf '%s\n' $'all\tAll selected files in one invocation' \
+            $'each\tOne invocation per selected file' | fzf --height=99% --min-height=1 \
+            --reverse --delimiter=$'\t' --with-nth=2 --prompt 'Apply command > ') || return 0
+        mode="${selected%%$'\t'*}"
+        [[ "$mode" == all || "$mode" == each ]] || return 0
+        ipre_command_history_save "$cmd_str" || return 1
+        ipre_command_run_selected "$mode" "$cmd_str" "$@" </dev/tty >/dev/tty 2>&1 || result=$?
+        printf '\nCommand finished (status %d). Press any key to return...' "$result"
+        read -k 1 -s _ </dev/tty
+        return "$result"
+    } always {
+        stty "$command_tty_state" </dev/tty
+        leave_alt_screen
+    }
+}
+
 ipre_palette_do_shell_cmd() {
     cd "$IPRE_CWD" || exit 0
     # Let vared report cancellation so the always block can restore the screen.
     setopt localoptions localtraps
     trap 'return 130' INT
+    local command_tty_state
+    command_tty_state=$(stty -g </dev/tty) || return 1
+    stty opost onlcr </dev/tty || return 1
     enter_alt_screen
     {
         print_title "Execute Shell Command"
@@ -193,6 +349,7 @@ ipre_palette_do_shell_cmd() {
 
         case "$mode" in
             b|B)
+                ipre_command_history_save "$cmd_str" || return 1
                 clear
                 print_title "Command Output"
                 # Run in foreground and keep stdout/stderr on terminal
@@ -201,6 +358,7 @@ ipre_palette_do_shell_cmd() {
                 read -k 1 -s _ < /dev/tty
                 ;;
             n|N)
+                ipre_command_history_save "$cmd_str" || return 1
                 # Run in background, redirect outputs to prevent terminal corruption
                 eval "$cmd_str" >/dev/null 2>&1 &
                 clear
@@ -213,6 +371,7 @@ ipre_palette_do_shell_cmd() {
                 ;;
         esac
     } always {
+        stty "$command_tty_state" </dev/tty
         leave_alt_screen
     }
 }
@@ -359,6 +518,9 @@ ipre_action_command_palette() {
         "open     | [System]   Open with default GUI app"
         "openwith | [System]   Open with..."
         "shell    | [System]   Execute shell command (Block/Non-block)|Unsafe"
+        "history  | [System]   Run ipre command history on selected files"
+        "symlink  | [Files]    Create symbolic links"
+        "content  | [Clipboard] Copy file contents (concatenate selected files)"
         "compress | [Archive]  Compress selected items"
         "extract  | [Archive]  Extract archive here"
         "gitadd   | [Git]      Add selected to staging"
@@ -381,6 +543,9 @@ ipre_action_command_palette() {
         open)     ipre_palette_do_open      "$@" ;;
         openwith) ipre_palette_do_open_with "$@" ;;
         shell)    ipre_palette_do_shell_cmd "$@" ;;
+        history)  ipre_palette_do_history_cmd "$@" ;;
+        symlink)  ipre_palette_do_symlink   "$@" ;;
+        content)  ipre_palette_do_copy_content "$@" ;;
         compress) ipre_palette_do_compress  "$@" ;;
         extract)  ipre_palette_do_extract   "$@" ;;
         gitadd)   ipre_palette_do_git_add   "$@" ;;

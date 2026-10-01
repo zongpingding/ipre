@@ -113,7 +113,7 @@ directory; `Enter` on a directory leaves the browser open.
 ### Browse files
 
 ```zsh
-ipre                          # Browse the current directory
+ipre                           # Browse the current directory
 ipre /path/to/directory        # Browse one directory
 ipre /path/one /path/two       # Search several directories together
 ipre --depth 3                 # Include entries up to three levels deep
@@ -165,6 +165,8 @@ pre get_file_type report.pdf  # Print the detected type without rendering
 | `Alt+-` / `Alt+=` | Decrease / increase search depth                                               |
 | `Alt+o`           | Cycle sorting by name / time / size / extension                                |
 | `Alt+p`           | Toggle the preview pane                                                        |
+| `F4` / `F5`       | Shrink / grow the preview by 10 percentage points (20%–80%)                     |
+| `F6`              | Switch between side-by-side and stacked preview layouts                        |
 | `Alt+f` / `Alt+b` | Next / previous PDF or DjVu page; otherwise scroll the preview down / up       |
 | `Alt+?`           | Show built-in help                                                             |
 
@@ -200,8 +202,34 @@ Inside the live grep picker, `Alt+f` switches to fuzzy filtering and `Alt+r`
 returns to ripgrep search. `Ctrl+f` / `Ctrl+b` scroll its preview.
 
 The command palette provides **Open with...**, system-default opening, archive
-creation and extraction, executable permissions, shell commands, Git staging,
-checksums, trash restoration, and trash emptying.
+creation and extraction, executable permissions, shell commands, command history,
+symbolic links, copying file contents, Git staging, checksums, trash restoration,
+and trash emptying. `Alt+h/j/k/l` are left available for system-level mappings.
+
+**Create symbolic links** asks for a link path for each selected item, initially
+`<current-directory>/<name>.lnk`. Targets are absolute paths. Clear a prompt to
+skip an item; existing files, directories, and links are never replaced. Path
+escapes follow the rename prompt (`\n`, `\t`, and `\\`).
+
+**Run ipre command history on selected files** lists commands previously executed
+through ipre's **Execute shell command** palette entry, newest first, with
+duplicates hidden. It does not read the shell's history. Commands are saved across
+sessions, starting with executions made after this feature was installed.
+After choosing a command, edit its arguments and choose **All selected files in
+one invocation** or **One invocation per selected file**. The editable command
+initially appends `"$@"` unless it already contains that expression. Remove old
+file arguments and move `"$@"` to the appropriate position for pipelines or more
+complex commands. Selected paths are passed as positional arguments to zsh;
+keep `"$@"` quoted to preserve spaces and special characters. Execution happens
+in the viewed directory, and output stays visible until a key is pressed.
+
+**Copy file contents** sends the exact bytes to `CLIPBOARD` (default `wl-copy`).
+Multiple files are concatenated in selection order without added separators.
+Every selected item must be a readable regular file (or a link to one).
+
+`F4` / `F5` adjust width in the side-by-side layout and height in the stacked
+layout. `F6` retains the chosen percentage when switching layouts. These keys
+apply to the main browser and refresh the preview at its new size.
 
 ## Browsing and File Operations
 
@@ -239,6 +267,12 @@ through directory symlinks. A failed copy may leave partial destination content;
 that destination is not treated as a successful focus target.
 
 ### Rename
+
+`Alt+r` merges the current fzf selection with the saved selection buffer and
+renames each distinct path once. Successful renames update the corresponding
+saved paths; skipped, failed, and unprocessed entries stay in the buffer.
+Items selected only in fzf are not added to the buffer. The copy/cut buffer is
+unchanged.
 
 Edited names are relative to each selected item's parent directory. Renaming
 `/a/b/c.txt` to `new.txt` produces `/a/b/new.txt`; entering `../new.txt` moves it
@@ -295,7 +329,7 @@ Configure the opener variables above and these settings in your shell:
 | Variable          | Purpose                                                       |
 |-------------------|---------------------------------------------------------------|
 | `IPRE_FD`         | Base fd command and arguments; defaults to `fd --follow -I .` |
-| `CLIPBOARD`       | System clipboard program for `Alt+y`; defaults to `wl-copy`   |
+| `CLIPBOARD`       | System clipboard command for paths and file contents; defaults to `wl-copy` |
 | `EZA_ARG`         | Arguments for directory and archive previews                  |
 | `FONT_TEXT`       | Sample text for font previews                                 |
 | `XDG_CACHE_HOME`  | Base cache directory; defaults to `~/.cache`                  |
@@ -316,6 +350,7 @@ export EZA_ARG='-lb --icons=always --color=always'
 | Data                                                               | Location                                                       | Lifetime                                           |
 |--------------------------------------------------------------------|----------------------------------------------------------------|----------------------------------------------------|
 | Navigation, history, filters, buffers, focus, view, and page state | `${XDG_RUNTIME_DIR:-/dev/shm}/ipre_<PID>`                      | Independent per invocation; removed on normal exit |
+| Commands executed through the ipre palette | `${XDG_DATA_HOME:-$HOME/.local/share}/ipre/commands.history-v1` | Shared across sessions |
 | Bookmarks                                                          | `${XDG_DATA_HOME:-$HOME/.local/share}/ipre/bookmarks.paths-v1` | Shared across sessions                             |
 | Trash                                                              | `${XDG_DATA_HOME:-$HOME/.local/share}/ipre/.trash`             | Shared across sessions                             |
 | Preview cache                                                      | `${XDG_CACHE_HOME:-$HOME/.cache}/pre_thumbs`                   | Reused across sessions                             |

@@ -49,8 +49,8 @@ IPRE_CWD="$REPLY"
 # ipre_backend bootstrap
 # =========================================================
 
-# Clip & Select Buffer Merge
-if [[ "$ACTION" == "ipre_action_command_palette" ]]; then
+# Merge saved selections with the current fzf selection (never the copy/cut buffer).
+if [[ "$ACTION" == ipre_action_command_palette || "$ACTION" == ipre_action_rename ]]; then
     if [[ -s "$IPRE_SELECT_FILE" ]]; then
         local -a sel_args=("${(@f)$(<"$IPRE_SELECT_FILE")}")
         local value
@@ -61,6 +61,11 @@ if [[ "$ACTION" == "ipre_action_command_palette" ]]; then
         local -A seen_args
         local -a final_args=()
         for arg in "$@"; do
+            [[ -n "$arg" ]] || continue
+            if [[ "$ACTION" == ipre_action_rename ]]; then
+                [[ "$arg" == /* ]] || arg="$IPRE_CWD/$arg"
+                arg="${arg:a}"
+            fi
             if [[ -z "${seen_args[$arg]}" ]]; then
                 final_args+=("$arg")
                 seen_args[$arg]=1
@@ -308,6 +313,25 @@ ipre_action_run() {
 
 
 #####  Page-Flipping Preview Engine   #####
+ipre_action_preview_geometry() {
+    local geometry_file="$IPRE_RAM_DIR/preview_geometry" layout=right size=50 border
+    local -a geometry=()
+    [[ -f "$geometry_file" ]] && geometry=(${=$(<"$geometry_file")})
+    [[ "${geometry[1]}" == right || "${geometry[1]}" == down ]] && layout="${geometry[1]}"
+    [[ "${geometry[2]}" == <-> ]] && size="${geometry[2]}"
+    case "$1" in
+        shrink) (( size-=10 )) ;;
+        grow) (( size+=10 )) ;;
+        toggle) [[ "$layout" == right ]] && layout=down || layout=right ;;
+        *) return 1 ;;
+    esac
+    (( size<20 )) && size=20
+    (( size>80 )) && size=80
+    [[ "$layout" == right ]] && border=left || border=top
+    printf '%s %d\n' "$layout" "$size" > "$geometry_file"
+    printf 'change-preview-window(%s,%d%%,border-%s)+refresh-preview\n' "$layout" "$size" "$border"
+}
+
 ipre_action_change_page() {
     local opt="$1"
     local current=1
@@ -820,6 +844,24 @@ ipre_rename_set_focus() {
     [[ -f "$IPRE_RAM_FOCUS_FILE" ]] || ipre_set_focus "$1"
 }
 
+ipre_rename_update_selection() {
+    [[ -s "$IPRE_SELECT_FILE" ]] || return 0
+    local old_key new_key index changed=0
+    ipre_path_encode "$1"; old_key="$REPLY"
+    ipre_path_encode "$2"; new_key="$REPLY"
+    local -a selected=("${(@f)$(<"$IPRE_SELECT_FILE")}")
+    for (( index=1; index<=${#selected}; index++ )); do
+        if [[ "${selected[index]}" == "$old_key" ]]; then
+            selected[index]="$new_key"
+            changed=1
+        fi
+    done
+    # Persist each success immediately, including when a later prompt is cancelled.
+    if (( changed )); then
+        printf '%s\n' "${selected[@]}" > "$IPRE_SELECT_FILE"
+    fi
+}
+
 ipre_action_rename() {
     cd "$IPRE_CWD" || exit 0
     [[ $# -eq 0 || -z "$1" ]] && exit 0
@@ -840,7 +882,11 @@ ipre_action_rename() {
         printf 'Source Dir : %s\n' "$(print_label "${old_path:h}")"
 
         # Keep the basename prefilled while the source path stays separate.
-        val=$(bash -c 'read -e -i "$1" -p "Rename '\''$1'\'' to: " ans </dev/tty && printf "%s\n" "$ans"' _ "$old_name")
+        val="$old_name"
+        if ! vared -p "Rename '${old_name//\%/%%}' to: " val </dev/tty; then
+            printf '\n'
+            break
+        fi
         if ! ipre_text_unescape "$val"; then
             printf 'Invalid name escape; use \\ for a literal backslash\n' >&2
             failed=1
@@ -880,6 +926,7 @@ ipre_action_rename() {
             failed=1
             continue
         fi
+        ipre_rename_update_selection "$old_path" "$clean_new" || failed=1
         ipre_rename_set_focus "$clean_new"
     done
     (( failed == 0 ))
@@ -915,6 +962,7 @@ ipre_action_wdired() {
 # Escapes: \\ for backslash, \n for newline, \t for tab, \xHH for a byte.
 # New names are relative to each selected item's parent directory.
 # Save and exit to apply. Delete all text to abort.
+# NOTE: use 'C-v TAB'(vim/nvim) or 'C-q TAB'(emacs) to insert a literal TAB key.
 # WARN: This function is potentially unsafe; there may be edge cases I haven't accounted for.
 
 EOF
@@ -940,7 +988,7 @@ EOF
             return 1
         fi
         (( ${#sources[@]} )) || return 0
-        ${EDITOR:-nvim} "$tmpfile" </dev/tty >/dev/tty || return 1
+        ${EDITOR:-nvim} -c "set listchars=tab:>\ |set list" "$tmpfile" </dev/tty >/dev/tty || return 1
         local -a tmp_lines=("${(@f)$(<"$tmpfile")}")
 
         # The editable text can never supply a new source path.
@@ -1441,24 +1489,46 @@ ipre_action_smart_diff() {
     leave_alt_screen
 }
 
+# Preserve SGR colors in grep content while escaping tabs and other controls.
+# Path keys and numeric fields never pass through this display-only helper.
+ipre_rg_escape_content() {
+    local value="$1" result="" sgr=$'\e''\[[0-9;]*m'
+    local MATCH MBEGIN MEND
+    while [[ "$value" =~ "$sgr" ]]; do
+        ipre_text_escape "${value[1,MBEGIN-1]}"
+        result+="$REPLY$MATCH"
+        value="${value[MEND+1,-1]}"
+    done
+    ipre_text_escape "$value"
+    REPLY="$result$REPLY"
+}
+
 # rg's NUL separates the filename from line:column:text. Only the first two
 # colons in that second part are metadata; filenames and contents stay intact.
 ipre_action_rg_stream() {
     [[ -n "$1" ]] || return 0
     cd -- "$IPRE_CWD" || return 1
     local filepath rest number column content label key IPRE_INPUT_BUFFER=""
-    rg --column --line-number --with-filename --no-heading --color=never --smart-case --null -- "$1" . 2>/dev/null | while ipre_stream_read $'\0'; do
+    rg --column --line-number --with-filename --no-heading --color=always \
+        --colors path:none --colors line:none --colors column:none \
+        --colors match:fg:red --colors match:style:bold \
+        --smart-case --null -- "$1" . 2>/dev/null | while ipre_stream_read $'\0'; do
         filepath="$REPLY"
         ipre_stream_read $'\n' || break
         rest="$REPLY"
         number="${rest%%:*}"; rest="${rest#*:}"
         column="${rest%%:*}"; content="${rest#*:}"
+        # With --color=always, rg wraps even uncolored metadata in resets.
+        # Strip only the outer wrappers so literal ESC bytes in paths survive.
+        filepath="${${filepath#$'\e[0m'}%$'\e[0m'}"
+        number="${${number#$'\e[0m'}%$'\e[0m'}"
+        column="${${column#$'\e[0m'}%$'\e[0m'}"
         [[ "$number" == <-> && "$column" == <-> ]] || continue
         filepath="${filepath:a}"
         ipre_path_encode "$filepath"; key="$REPLY"
         ipre_display_path "$filepath"; label="$REPLY"
-        ipre_text_escape "$content"
-        printf '%s\t%s\t%s\t%s:%s:%s:%s\n' "$key" "$number" "$column" "$label" "$number" "$column" "$REPLY"
+        ipre_rg_escape_content "$content"
+        printf '%s\t%s\t%s\t%s:%s:%s:%s\033[0m\n' "$key" "$number" "$column" "$label" "$number" "$column" "$REPLY"
     done
     return 0
 }
@@ -1479,7 +1549,7 @@ ipre_action_live_grep() {
         local backend="${(q)IPRE_BACKEND_CMD}" selected line filepath key
         local -a unique_keys=()
         selected=$(
-            fzf -m --prompt 'Ripgrep > ' --disabled --layout=reverse \
+            fzf -m --ansi --prompt 'Ripgrep > ' --disabled --layout=reverse \
                 --delimiter=$'\t' --with-nth=4 \
                 --bind "start:reload:$backend ipre_action_rg_stream -- {q}" \
                 --bind "change:reload:$backend ipre_action_rg_stream -- {q}" \
@@ -1489,7 +1559,7 @@ ipre_action_live_grep() {
                 --bind 'ctrl-f:preview-half-page-down' --bind 'ctrl-b:preview-half-page-up' \
                 --preview "$backend ipre_action_rg_preview --encoded {1} {2}" \
                 --preview-window 'right:50%,border-left,+{2}-/2' < /dev/tty
-        )
+		)
         [[ -n "$selected" ]] || return 0
         local -A seen=()
         for line in "${(@f)selected}"; do
@@ -1563,35 +1633,45 @@ ipre_action_help() {
     print_title "ipre Keybindings"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Ctrl+q"        "$C_RST" "Exit ipre"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+q"         "$C_RST" "Exit and CD to current viewed dir"
-    printf "  %b%-18s%b : %s\n" "$C_YLW" "Enter"         "$C_RST" "Open file/directory"
+    printf "  %b%-18s%b : %s\n" "$C_YLW" "Enter"         "$C_RST" "Open and exit; --keep-open opens files without exiting"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "[Left/Right]"  "$C_RST" "Navigate parent/child directories"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "F2/F3"         "$C_RST" "Directory history back/forward"
+    printf "  %b%-18s%b : %s\n" "$C_YLW" "F4 / F5"       "$C_RST" "Shrink/grow preview by 10% (20%-80%)"
+    printf "  %b%-18s%b : %s\n" "$C_YLW" "F6"            "$C_RST" "Toggle side-by-side / stacked preview layout"
+    printf "  %b%-18s%b : %s\n" "$C_YLW" "Tab / Shift+Tab" "$C_RST" "Toggle item selection and move down/up"
+    printf "  %b%-18s%b : %s\n" "$C_YLW" "Esc / Ctrl+g"  "$C_RST" "Esc ignored; Ctrl+g cancels the browser"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+e"         "$C_RST" "Toggle(Expand) compact/detailed listing"
-    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+[f/b]"     "$C_RST" "Preview window Scroll up/down"
+    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+f / Alt+b" "$C_RST" "Preview down/up; next/previous PDF or DjVu page"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "\`(Backtick)"  "$C_RST" "Toggle File/Directory/All view"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+p"         "$C_RST" "Toggle preview window"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+."         "$C_RST" "Toggle hidden files"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+[0~9]"     "$C_RST" "Set search depth (0 for infinite)"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+[-/=]"     "$C_RST" "Decrease/Increase search depth"
+    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt++"         "$C_RST" "Diff exactly two files in the saved selection buffer"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+o"         "$C_RST" "Cycle sort mode (name/time/size/ext)"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+g"         "$C_RST" "Live Grep (Search file content)"
-    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+a"         "$C_RST" "Toggle selection (Invert)"
+    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+a"         "$C_RST" "Toggle selection of all matching items"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+y"         "$C_RST" "Copy path(s) to clipboard"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+[c/x/v]"   "$C_RST" "Copy/Cut/Paste files"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+i"         "$C_RST" "Inspect ipre select|clip system"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+s"         "$C_RST" "Cross-directory multi-selection"
-    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+r"         "$C_RST" "Rename selected item(s) |Use Ripgrep in live grep"
-    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+f"         "$C_RST" "Preview window Scroll up|Use Fuzzy in live grep"
+    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+r"         "$C_RST" "Rename current + saved selections (deduplicated)"
     printf "  %b%-18s%b : %s%b(%s)%b\n" "$C_YLW" "Alt+w" "$C_RST" "Wdired batch rename" "${C_RED}" "UNSAFE" "$C_RST"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+n"         "$C_RST" "Create new file/directory"
-    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+d"         "$C_RST" "Delete selected"
+    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+d"         "$C_RST" "Move selected items to trash"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+m"         "$C_RST" "Bookmark selected items"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+/"         "$C_RST" "Open bookmarks menu"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+;"         "$C_RST" "Global Search & Replace[rg](by nvim & grug-far.nvim)"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+'"         "$C_RST" "Global Search & Replace[ast-rg](by nvim & grug-far.nvim)"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+?"         "$C_RST" "Show this help"
     printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+t"         "$C_RST" "To directory by Zoxide"
-    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+Space"     "$C_RST" "Open command pallete"
+    printf "  %b%-18s%b : %s\n" "$C_YLW" "Alt+Space"     "$C_RST" "Open command palette (links, command history, copy contents, ...)"
+    echo ""
+    print_title "Live Grep keys (Alt+g)"
+    printf '  Alt+f / Alt+r    : Fuzzy filter / ripgrep search\n'
+    printf '  Alt+a / Alt+d    : Select all / deselect all\n'
+    printf '  Ctrl+f / Ctrl+b  : Preview down / up\n'
+    printf '  Enter / Esc     : Jump to selection / cancel\n'
     echo ""
     printf "Press any key to return..."
     read -k 1 -s _ < /dev/tty
