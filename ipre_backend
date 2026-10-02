@@ -1053,7 +1053,8 @@ HEADER
             sources+=("$source_path"); identities+=("$REPLY")
             id="${#sources}"; row_sources[$id]="$source_path"
             ipre_text_escape "$item"
-            printf '# [%d] Source: %s\n' "$id" "$REPLY" >> "$tmpfile"
+            # do NOT print file details comments
+            # printf '# [%d] Source: %s\n' "$id" "$REPLY" >> "$tmpfile"
             ipre_text_escape "${source_path:t}"
             printf '[%d]\t%s\n' "$id" "$REPLY" >> "$tmpfile"
         done
@@ -1798,13 +1799,13 @@ ipre_action_live_grep() {
                 --bind "change:reload:$backend ipre_action_rg_stream -- {q}" \
                 --bind 'alt-f:unbind(change)+change-prompt(Fuzzy > )+enable-search+clear-query' \
                 --bind "alt-r:rebind(change)+change-prompt(Ripgrep > )+disable-search+clear-query+reload($backend ipre_action_rg_stream -- {q})" \
-                --bind 'alt-a:select-all' --bind 'alt-d:deselect-all' \
+                --bind 'alt-a:toggle-all' --bind 'alt-d:deselect-all' \
                 --bind "alt-e:execute($backend ipre_action_rg_export edit {+f} {*f})+refresh-preview+transform-header(cat $notice)" \
                 --bind "alt-y:execute-silent($backend ipre_action_rg_export copy {+f} {*f})+transform-header(cat $notice)" \
                 --bind 'ctrl-f:preview-half-page-down' --bind 'ctrl-b:preview-half-page-up' \
                 --preview "$backend ipre_action_rg_preview --encoded {1} {2}" \
                 --preview-window 'right:50%,border-left,+{2}-/2' < /dev/tty
-		)
+                )
         [[ -n "$selected" ]] || return 0
         local -A seen=()
         for line in "${(@f)selected}"; do
