@@ -3,10 +3,33 @@
 import os
 import subprocess
 
-from support import IpreTestCase, ROOT, path_key
+from support import IpreTestCase, ROOT, editor_text, path_key
 
 
 class PathsTests(IpreTestCase):
+    def test_display_paths_accept_logical_and_physical_prefixes_without_hiding_other_roots(self):
+        real = self.root / "real [directory]\n"
+        real.mkdir()
+        link = self.cwd / "alias [directory]"
+        link.symlink_to(real, target_is_directory=True)
+        cases = [
+            (link, link / "child\t.txt", "child\t.txt"),
+            (link, real / "nested" / "child.txt", "nested/child.txt"),
+            (link, str(real) + "-other/child.txt", str(real) + "-other/child.txt"),
+            (link, self.root / "outside.txt", str(self.root / "outside.txt")),
+            ("/", "/tmp/child.txt", "tmp/child.txt"),
+        ]
+        for cwd, value, expected in cases:
+            with self.subTest(cwd=cwd, value=value):
+                result = subprocess.run(
+                    ["zsh", "-fc", 'source "$1"; IPRE_CWD="$2"; '
+                     'ipre_display_path "$3"; printf "%s" "$REPLY"',
+                     "-", str(ROOT / "ipre_paths"), str(cwd), str(value)],
+                    text=True, capture_output=True, timeout=5,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, editor_text(expected))
+
     def test_path_codec_preserves_all_nonzero_bytes_and_rejects_invalid_encoding(self):
         payload = bytes(range(1, 256)) + b"%0A\\n\n"
         result = subprocess.run(

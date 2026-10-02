@@ -21,8 +21,10 @@ Standard discovery also works: `python3 -m unittest discover -s tests -v`.
 ## Environment
 
 Use Linux, Python 3 and zsh, with bash, fd, fzf, ripgrep, file and GNU coreutils
-installed. No Python packages, editor, graphical display or PDF renderer are
-required. fzf must support `--id-nth` and `reload-sync` for view changes that retain
+installed. No Python packages, graphical display or PDF renderer are required.
+Real Quickfix integration tests use installed `nvim`/`vim` and skip when the
+editor is unavailable. fzf must support `{*f}` for exporting all matches,
+and `--id-nth` and `reload-sync` for view changes that retain
 selection. Run as a regular user: tests of directory write permissions are skipped
 as root. Some tests require a working PTY; run outside containers that prohibit
 PTY creation. Individual suites may skip tests when fd/fzf/rg are unavailable;
@@ -50,6 +52,7 @@ manual fixtures and are neither used nor removed by this suite.
 | `test_paste.py` | Copy/cut success, partial failure, retries, self/descendant guards |
 | `test_trash.py` | Collision-free deletion, original-path restoration, failure preservation, screen cleanup |
 | `test_preview.py` | Preview arguments, PDF/DjVu page limits, text scrolling and grep paths |
+| `test_grep_export.py` | Live grep marked/all/fuzzy exports, clipboard failures, exact Quickfix paths and positions, successive editing in real Vim/Neovim, and return to the picker |
 | `test_cache.py` | Actual `pre` entry point, directory identity, cache reuse, timestamp precision and pages |
 | `test_palette.py` | Cancel/empty prompts, real Ctrl+C, execution modes and alternate-screen cleanup |
 | `test_palette_files.py` | Symlink conflicts, exact clipboard bytes, internal command history and safe selected-file arguments |

@@ -1605,17 +1605,36 @@ ipre_action_smart_diff() {
     leave_alt_screen
 }
 
+# Grep text is display-only, not reversible editor input: printable characters
+# (including backslashes) stay literal. Controls must not split records/fields.
+ipre_rg_escape_text() {
+    local value="$1" char result="" i
+    if [[ "$value" != *[^[:print:]]* ]]; then
+        REPLY="$value"
+        return 0
+    fi
+    for (( i=1; i<=${#value}; i++ )); do
+        char="${value[i]}"
+        if [[ "$char" != [[:print:]] ]]; then
+            ipre_text_escape "$char"
+            char="$REPLY"
+        fi
+        result+="$char"
+    done
+    REPLY="$result"
+}
+
 # Preserve SGR colors in grep content while escaping tabs and other controls.
 # Path keys and numeric fields never pass through this display-only helper.
 ipre_rg_escape_content() {
     local value="$1" result="" sgr=$'\e''\[[0-9;]*m'
     local MATCH MBEGIN MEND
     while [[ "$value" =~ "$sgr" ]]; do
-        ipre_text_escape "${value[1,MBEGIN-1]}"
+        ipre_rg_escape_text "${value[1,MBEGIN-1]}"
         result+="$REPLY$MATCH"
         value="${value[MEND+1,-1]}"
     done
-    ipre_text_escape "$value"
+    ipre_rg_escape_text "$value"
     REPLY="$result$REPLY"
 }
 
@@ -1659,20 +1678,129 @@ ipre_action_rg_preview() {
     fi
 }
 
+ipre_rg_export_notice() {
+    printf 'Alt+e: Quickfix | Alt+y: Copy locations | marked or all matches\n%s\n' "$1" > "$IPRE_RAM_DIR/rg_notice"
+}
+
+# fzf supplies temporary record files rather than argv lists (no ARG_MAX limit).
+# Keep every match, including multiple locations in the same file.
+ipre_action_rg_export() {
+    local mode="$1" records="$3" temp_dir line rest key filename number column label
+    local count=0 failed=0
+    local -a command_args=()
+    setopt localoptions localtraps
+    [[ "$mode" == copy || "$mode" == edit ]] || return 1
+    if [[ "${FZF_SELECT_COUNT:-0}" == <1-> ]]; then records="$2"; fi
+    if [[ ! -r "$records" ]]; then
+        ipre_rg_export_notice 'Cannot read grep results'
+        return 1
+    fi
+    cd -- "$IPRE_CWD" || { ipre_rg_export_notice 'Search directory is unavailable'; return 1; }
+    local IPRE_DISPLAY_CWD="${IPRE_CWD:A}"
+    temp_dir=$(mktemp -d -- "$IPRE_RAM_DIR/rg-export.XXXXXX") || {
+        ipre_rg_export_notice 'Cannot create export files'; return 1
+    }
+    trap 'ipre_rg_export_notice "Operation interrupted"; return 130' INT
+    trap 'ipre_rg_export_notice "Operation interrupted"; return 143' TERM
+    trap 'ipre_rg_export_notice "Operation interrupted"; return 129' HUP
+    {
+        if ! printf 'let s:items = []\n' > "$temp_dir/quickfix.vim" || ! : > "$temp_dir/locations"; then
+            ipre_rg_export_notice 'Cannot write export files'
+            return 1
+        fi
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            # fzf may represent an empty placeholder list as a blank line.
+            [[ -z "$line" ]] && continue
+            [[ "$line" == *$'\t'*$'\t'*$'\t'* ]] || { failed=1; break; }
+            key="${line%%$'\t'*}"; rest="${line#*$'\t'}"
+            number="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
+            column="${rest%%$'\t'*}"
+            if ! ipre_saved_path_decode "$key" ||
+               [[ ! "$number" =~ '^[1-9][0-9]*$' || ! "$column" =~ '^[1-9][0-9]*$' ]]; then
+                failed=1; break
+            fi
+            filename="$REPLY"
+            if [[ "$mode" == edit ]]; then
+                if [[ ! -f "$filename" || ! -r "$filename" ]]; then
+                    ipre_rg_export_notice 'A result file is missing or unreadable; search again'
+                    return 1
+                fi
+                # Vim double-quoted byte escapes preserve arbitrary filenames
+                # without turning quotes, newlines or backslashes into code.
+                ipre_byte_escape "$filename"
+                printf 'call add(s:items, {"filename": "%s", "lnum": %s, "col": %s})\n' \
+                    "$REPLY" "$number" "$column" >> "$temp_dir/quickfix.vim" || { failed=1; break; }
+            else
+                ipre_display_path "$filename"; label="$REPLY"
+                printf '%s:%s:%s:\n' "$label" "$number" "$column" >> "$temp_dir/locations" || { failed=1; break; }
+            fi
+            (( ++count ))
+        done < "$records"
+        if (( failed )); then
+            ipre_rg_export_notice 'Cannot export malformed results or write export files'
+            return 1
+        fi
+        if (( ! count )); then
+            ipre_rg_export_notice 'No matching results'
+            return 0
+        fi
+        if [[ "$mode" == copy ]]; then
+            command_args=("${(@Q)${(z)${CLIPBOARD:-wl-copy}}}")
+            if (( ! ${#command_args} )) || ! command -v -- "${command_args[1]}" >/dev/null 2>&1; then
+                ipre_rg_export_notice 'Clipboard program unavailable'
+                return 1
+            fi
+            if ! "${command_args[@]}" < "$temp_dir/locations"; then
+                ipre_rg_export_notice 'Failed to copy locations'
+                return 1
+            fi
+            ipre_rg_export_notice "Copied $count location(s)"
+        else
+            command_args=("${(@Q)${(z)${EDITOR:-nvim}}}")
+            case "${command_args[1]:t}" in
+                nvim|vim|vi) ;;
+                *) ipre_rg_export_notice 'Quickfix requires EDITOR=nvim or vim (options allowed)'; return 1 ;;
+            esac
+            if ! command -v -- "${command_args[1]}" >/dev/null 2>&1; then
+                ipre_rg_export_notice 'Editor program unavailable'
+                return 1
+            fi
+            if ! printf '%s\n' \
+                "call setqflist([], 'r', {'title': 'ipre live grep', 'items': s:items})" \
+                'unlet s:items' 'copen' 'silent cfirst' >> "$temp_dir/quickfix.vim"; then
+                ipre_rg_export_notice 'Cannot write Quickfix script'
+                return 1
+            fi
+            if ! "${command_args[@]}" -S "$temp_dir/quickfix.vim" </dev/tty >/dev/tty; then
+                ipre_rg_export_notice 'Editor exited with an error'
+                return 1
+            fi
+            ipre_rg_export_notice "Returned from Quickfix ($count locations); Alt+r to start a fresh search"
+        fi
+    } always {
+        rm -f -- "$temp_dir/quickfix.vim" "$temp_dir/locations"
+        rmdir -- "$temp_dir" 2>/dev/null
+    }
+}
+
 ipre_action_live_grep() {
     command -v rg >/dev/null || return 1
     enter_alt_screen
     {
         local backend="${(q)IPRE_BACKEND_CMD}" selected line filepath key
+        local notice="${(q)IPRE_RAM_DIR}/rg_notice"
         local -a unique_keys=()
         selected=$(
             fzf -m --ansi --prompt 'Ripgrep > ' --disabled --layout=reverse \
                 --delimiter=$'\t' --with-nth=4 \
+                --header 'Alt+e: Quickfix | Alt+y: Copy locations | marked or all matches' \
                 --bind "start:reload:$backend ipre_action_rg_stream -- {q}" \
                 --bind "change:reload:$backend ipre_action_rg_stream -- {q}" \
                 --bind 'alt-f:unbind(change)+change-prompt(Fuzzy > )+enable-search+clear-query' \
                 --bind "alt-r:rebind(change)+change-prompt(Ripgrep > )+disable-search+clear-query+reload($backend ipre_action_rg_stream -- {q})" \
                 --bind 'alt-a:select-all' --bind 'alt-d:deselect-all' \
+                --bind "alt-e:execute($backend ipre_action_rg_export edit {+f} {*f})+refresh-preview+transform-header(cat $notice)" \
+                --bind "alt-y:execute-silent($backend ipre_action_rg_export copy {+f} {*f})+transform-header(cat $notice)" \
                 --bind 'ctrl-f:preview-half-page-down' --bind 'ctrl-b:preview-half-page-up' \
                 --preview "$backend ipre_action_rg_preview --encoded {1} {2}" \
                 --preview-window 'right:50%,border-left,+{2}-/2' < /dev/tty
@@ -1702,6 +1830,7 @@ ipre_action_live_grep() {
             printf '%s\n' "${merged[@]}" > "$IPRE_SELECT_FILE"
         fi
     } always {
+        rm -f -- "$IPRE_RAM_DIR/rg_notice"
         leave_alt_screen
     }
 }
@@ -1787,6 +1916,9 @@ ipre_action_help() {
     print_title "Live Grep keys (Alt+g)"
     printf '  Alt+f / Alt+r    : Fuzzy filter / ripgrep search\n'
     printf '  Alt+a / Alt+d    : Select all / deselect all\n'
+    printf '  Alt+e           : Edit marked results (or all matches) in Vim/Neovim Quickfix\n'
+    printf '  Alt+y           : Copy marked locations (or all matches) as path:line:column:\n'
+    printf '                    Exports honor fuzzy filtering; editing returns to this picker.\n'
     printf '  Ctrl+f / Ctrl+b  : Preview down / up\n'
     printf '  Enter / Esc     : Jump to selection / cancel\n'
     echo ""

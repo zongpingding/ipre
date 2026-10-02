@@ -13,10 +13,48 @@ import termios
 import time
 from urllib.parse import unquote
 
-from support import IpreTestCase, ROOT, BACKEND, path_key
+from support import IpreTestCase, ROOT, BACKEND, editor_text, path_key
 
 
 class BrowserTests(IpreTestCase):
+    def test_symlink_directory_listing_uses_relative_labels_and_keeps_operation_paths(self):
+        real = self.root / "DISK_EXT" / "Downloads"
+        (real / "Dotfiles").mkdir(parents=True)
+        (real / "fonts").mkdir()
+        (real / "Dotfiles" / "nested.txt").write_text("nested")
+        source = real / "file\tname\n.txt"
+        source.write_text("payload")
+        link = self.cwd / "Downloads"
+        link.symlink_to(real, target_is_directory=True)
+        (real / "file-link").symlink_to(source.name)
+        for depth in ("0", "1", "2"):
+            for view in ("compact", "detailed"):
+                for icons in ("0", "1"):
+                    with self.subTest(depth=depth, view=view, icons=icons):
+                        (self.state / "CWD").write_text(path_key(self.cwd) + "\n")
+                        (self.state / "RAM_DEPTH").write_text(depth + "\n")
+                        (self.state / "VIEW").write_text(view + "\n")
+                        self.env["IPRE_ICONS"] = icons
+                        result = self.backend("ipre_action_right", "--encoded", path_key(link))
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual((self.state / "CWD").read_text(), path_key(link) + "\n")
+                        rows = {row.split("\t")[0]: row for row in result.stdout.splitlines()}
+                        entries = list(real.iterdir())
+                        if depth != "1":
+                            entries.append(real / "Dotfiles" / "nested.txt")
+                        self.assertEqual(set(rows), {path_key(p) for p in entries})
+                        for entry in entries:
+                            icon = ""
+                            if icons == "1" and depth != "0":
+                                icon = "󰡯 " if entry.is_symlink() else " " if entry.is_dir() else " "
+                            label = icon + editor_text(entry.relative_to(real))
+                            if entry.is_dir():
+                                label += "/"
+                            self.assertEqual(rows[path_key(entry)].split("\t")[1], label)
+                        self.backend("ipre_action_copy", "--records", rows[path_key(real / "file-link")])
+                        self.assertEqual((self.state / "CLIP").read_text(),
+                                         "COPY\n" + path_key(real / "file-link") + "\n")
+
     def test_listing_keeps_arrows_symlinks_and_control_characters(self):
         if not shutil.which("fd"):
             self.skipTest("fd is needed for listing")

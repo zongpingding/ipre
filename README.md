@@ -56,6 +56,7 @@ support Sixel. File icons also need a compatible font, such as a Nerd Font.
 |-------------------------------------|------------------------------------------------------------------------------|
 | Copy paths to the system clipboard  | `wl-copy`, or the program configured by `CLIPBOARD`                          |
 | Live content search                 | ripgrep (`rg`)                                                               |
+| Edit live grep results              | Neovim or Vim, configured through `EDITOR` (default `nvim`)                   |
 | Directory jumps                     | `zoxide`                                                                     |
 | Global search and replace           | Neovim with `grug-far.nvim`, plus `rg` or `ast-grep` for the selected engine |
 | Archive creation and extraction     | `tar`, `zip`, `unzip`, and the relevant compression tools                    |
@@ -200,6 +201,23 @@ pre get_file_type report.pdf  # Print the detected type without rendering
 
 Inside the live grep picker, `Alt+f` switches to fuzzy filtering and `Alt+r`
 returns to ripgrep search. `Ctrl+f` / `Ctrl+b` scroll its preview.
+`Alt+e` opens the results in Vim/Neovim's Quickfix list; `Alt+y` copies their
+locations as `relative/path:line:column:` lines using `CLIPBOARD` (default
+`wl-copy`). Both actions use the marked items when there are any, otherwise
+all currently matching items, including those offscreen. Fuzzy filtering is
+respected, and different matches in the same file remain separate entries.
+
+Quickfix supports `EDITOR=nvim`, `vim`, or `vi` backed by Vim, including quoted
+executable paths and options. It opens the first matching location and the
+result list. Save changes with `:w`, use `:cnext` / `:cprev` for adjacent
+locations or `:cnfile` for the next file, and use `:qa` to leave the editor.
+Closing the editor returns to the same live grep query, marks and filtered
+list. This list is a snapshot; after edits, use `Alt+r` and enter a query to
+search the updated files. Copying locations also keeps the picker open.
+Quickfix receives exact paths separately from display text. Clipboard paths
+use the usual ipre escapes for backslashes and control characters; paths
+outside the current directory remain absolute. Status and errors appear in
+the picker header.
 
 The command palette provides **Open with...**, system-default opening, archive
 creation and extraction, executable permissions, shell commands, command history,

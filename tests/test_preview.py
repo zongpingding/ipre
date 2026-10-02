@@ -70,7 +70,27 @@ class PreviewTests(IpreTestCase):
         self.assertEqual(fields[3].count("\x1b[31mneedle\x1b[0m"), 2)
         display = re.sub(r"\x1b\[[0-9;]*m", "", fields[3])
         self.assertNotIn("\x1b", display)
-        self.assertTrue(display.endswith(r"前缀\tneedle\\tail\x1B[2J needle"))
+        self.assertTrue(display.endswith(r"前缀\tneedle\tail\x1B[2J needle"))
+
+    def test_live_grep_displays_latex_and_literal_escape_sequences_verbatim(self):
+        if not shutil.which("rg"):
+            self.skipTest("ripgrep is needed for live grep")
+        source = self.cwd / "chapter.tex"
+        content = r"  M \mathop{\lim }\limits_{\epsilon} \\ \n \t \x1B 中文 " + "\\"
+        source.write_text(content + "\n")
+        for query, matched in ((r"\\", "\\"), ("mathop", "mathop"), (r"\\\\", "\\\\")):
+            with self.subTest(query=query):
+                result = self.backend("ipre_action_rg_stream", "--", query)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                records = result.stdout.splitlines()
+                self.assertEqual(len(records), 1)
+                fields = records[0].split("\t")
+                column = str(content.index(matched) + 1)
+                self.assertEqual(len(fields), 4)
+                self.assertEqual(fields[:3], [path_key(source), "1", column])
+                self.assertIn("\x1b[31m" + matched + "\x1b[0m", fields[3])
+                display = re.sub(r"\x1b\[[0-9;]*m", "", fields[3])
+                self.assertEqual(display, f"chapter.tex:1:{column}:{content}")
 
     def test_live_grep_empty_missing_and_invalid_queries_have_no_records(self):
         if not shutil.which("rg"):
