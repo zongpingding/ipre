@@ -179,8 +179,16 @@ ipre_path_lines() {
 }
 
 ipre_display_path() {
-    local label="$1"
-    [[ "$label" == "$IPRE_CWD/"* ]] && label="${label#"$IPRE_CWD/"}"
+    local label="$1" prefix="${IPRE_CWD%/}/"
+    if [[ "$label" == "$prefix"* ]]; then
+        label="${label#"$prefix"}"
+    else
+        # Records may use the physical cwd even when navigation keeps a symlink
+        # path. Shorten only the label; never dereference the selected entry.
+        local physical_cwd="${IPRE_DISPLAY_CWD:-${IPRE_CWD:A}}"
+        prefix="${physical_cwd%/}/"
+        [[ "$label" == "$prefix"* ]] && label="${label#"$prefix"}"
+    fi
     ipre_text_escape "$label"
 }
 

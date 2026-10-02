@@ -246,6 +246,8 @@ ipre_listing_record() {
 # fd supplies lossless paths. Presentation is built separately from those paths.
 ipre_listing_records() {
     cd -- "$IPRE_CWD" || return 1
+    # Resolve once per listing, not once per displayed entry.
+    local IPRE_DISPLAY_CWD="${IPRE_CWD:A}"
     local run_cmd="$IPRE_FD_CMD_STR --print0 --color=never"
     local state="$(<"$IPRE_STATE_FILE")" depth="$(<"$IPRE_RAM_DEPTH_FILE")"
     local sort_mode="$(<"$IPRE_SORT_FILE")" value quoted record label priority key IPRE_INPUT_BUFFER=""
@@ -1622,6 +1624,7 @@ ipre_rg_escape_content() {
 ipre_action_rg_stream() {
     [[ -n "$1" ]] || return 0
     cd -- "$IPRE_CWD" || return 1
+    local IPRE_DISPLAY_CWD="${IPRE_CWD:A}"
     local filepath rest number column content label key IPRE_INPUT_BUFFER=""
     rg --column --line-number --with-filename --no-heading --color=always \
         --colors path:none --colors line:none --colors column:none \
