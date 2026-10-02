@@ -188,8 +188,9 @@ class IpreTestCase(unittest.TestCase):
         self.env["IPRE_TEST_NEW_NAME"] = new_name
         result = self.backend(
             "ipre_action_rename", str(target),
-            script='bash() { print -r -- "$IPRE_TEST_NEW_NAME"; }; '
+            script='vared() { val="$IPRE_TEST_NEW_NAME"; }; '
             'clear() { :; }; sleep() { :; }; source "$1" "$2" "$3"',
+            tty=True, expected_returncode=expected_returncode,
         )
         self.assertEqual(result.returncode, expected_returncode, result.stderr)
         return result
@@ -205,7 +206,7 @@ class IpreTestCase(unittest.TestCase):
         editor.write_text(
             "#!/usr/bin/env python3\n"
             "import json, os, pathlib, sys\n"
-            "p = pathlib.Path(sys.argv[1])\n"
+            "p = pathlib.Path(sys.argv[-1])\n"
             "s = p.read_text()\n"
             "for old, new in json.loads(os.environ['IPRE_TEST_RENAME_ROWS']).items():\n"
             "    s = s.replace(old, new)\n"

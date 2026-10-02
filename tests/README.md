@@ -46,17 +46,26 @@ manual fixtures and are neither used nor removed by this suite.
 | `test_paths.py` | Byte-preserving encoding, invalid input, stream boundaries |
 | `test_buffers.py` | Bookmarks, selection and buffer editing |
 | `test_rename.py` | Source identity, swaps, conflicts, staging and rollback |
+| `test_wdired.py` | Row validation/cancellation/CRLF, special byte names, aliases, mixed-type cycles, hardlinks/FIFOs/sockets, permissions, directory replacement, signals, staging/commit failures and recovery |
 | `test_paste.py` | Copy/cut success, partial failure, retries, self/descendant guards |
 | `test_trash.py` | Collision-free deletion, original-path restoration, failure preservation, screen cleanup |
 | `test_preview.py` | Preview arguments, PDF/DjVu page limits, text scrolling and grep paths |
 | `test_cache.py` | Actual `pre` entry point, directory identity, cache reuse, timestamp precision and pages |
 | `test_palette.py` | Cancel/empty prompts, real Ctrl+C, execution modes and alternate-screen cleanup |
+| `test_palette_files.py` | Symlink conflicts, exact clipboard bytes, internal command history and safe selected-file arguments |
+| `test_preview_geometry.py` | Preview size limits and real frontend F4/F5/F6 sizing and layout changes |
 
 The cache suite replaces PDF rendering and image display with deterministic
 commands while running `pre` itself. The concurrency test holds two real
 frontends open with a controlled fzf replacement; other tests exercise real fzf.
 Injected move/copy failures let tests verify that original data and retry state
 survive failures without relying on timing or hardware faults.
+Wdired tests inject failure before and after each of the six moves in a
+three-item cycle. They also replace paths during editing, staging, commit and
+rollback, checking that unrelated files survive and recovery maps are retained
+when automatic restoration cannot finish. Cross-filesystem rejection is tested
+with a simulated device ID; socket tests require permission to bind a local
+Unix socket in the temporary directory.
 The browser interaction test sends real `Alt+e`, `F2` and `F3` keys and checks
 that multi-selection survives the switch to detailed view and filename search
 survives switching back and forth. Opener tests record

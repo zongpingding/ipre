@@ -47,9 +47,10 @@ class SessionTests(IpreTestCase):
             first = json.loads(sessions[0][1].read_text())
             second = json.loads(sessions[1][1].read_text())
             for key in first:
-                if key.endswith("_FILE") and key != "IPRE_BOOKMARKS_FILE":
+                if key.endswith("_FILE") and key not in ("IPRE_BOOKMARKS_FILE", "IPRE_COMMAND_HISTORY_FILE"):
                     self.assertNotEqual(first[key], second[key], key)
             self.assertEqual(first["IPRE_BOOKMARKS_FILE"], second["IPRE_BOOKMARKS_FILE"])
+            self.assertEqual(first["IPRE_COMMAND_HISTORY_FILE"], second["IPRE_COMMAND_HISTORY_FILE"])
             second_dir = pathlib.Path(second["IPRE_RAM_DIR"])
             before = {p.name: p.read_bytes() for p in second_dir.iterdir()}
 
@@ -60,6 +61,7 @@ class SessionTests(IpreTestCase):
 
             action(first, "ipre_action_right", "--encoded", path_key(sessions[0][2] / "nested"))
             action(first, "ipre_action_toggle_view")
+            action(first, "ipre_action_preview_geometry", "shrink")
             action(first, "ipre_action_history_back")
             action(first, "ipre_action_history_forward")
             action(first, "ipre_action_cut", "--encoded", path_key(sessions[0][2] / "source.txt"))

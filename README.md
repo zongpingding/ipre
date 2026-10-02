@@ -279,8 +279,21 @@ Edited names are relative to each selected item's parent directory. Renaming
 to `/a/new.txt`.
 
 Batch rename rows contain a fixed `[id]`, a TAB, and an editable name. Keep the
-IDs intact, and rename a directory and its children in separate batches. Batch
-moves use temporary paths beside the sources and attempt rollback on failure.
+IDs intact; rows may be reordered. An empty name skips that row, and deleting
+all rows cancels the batch. LF and CRLF editor files are supported; use `\r`
+for a literal carriage return in a name. The entire edit is validated before
+any file moves; a missing, duplicate, or invalid row, a changed source, or a
+destination conflict cancels the batch. Rename a directory and its selected
+children in separate batches.
+Batch moves use temporary paths on each source filesystem. Cross-filesystem
+moves are rejected so a failed rename cannot leave a partial copy. On an
+interruption or move failure, ipre attempts to restore the original paths. If
+outside changes prevent rollback, it keeps the payload in its temporary
+`.ipre-rename.*` directory, or at an already committed destination, and leaves
+a `recovery.txt` map in the staging directory. Parent directories are checked
+before and after moves to detect replacement by another process. This is not
+an atomic filesystem transaction: concurrent external changes can prevent
+rollback, and SIGKILL or a system crash cannot run the recovery code.
 
 Names containing arrows, percent signs, TAB, newlines, and non-UTF-8 bytes are
 kept separate from their display labels. Name editors use `\n` for newline,

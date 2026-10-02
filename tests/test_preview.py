@@ -1,6 +1,7 @@
 """Regression tests for preview."""
 
 import os
+import re
 import shutil
 
 from support import IpreTestCase, path_key
@@ -50,7 +51,77 @@ class PreviewTests(IpreTestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         fields = result.stdout.strip().split("\t", 3)
         self.assertEqual(fields[:3], [path_key(source), "1", "1"])
-        self.assertIn("colon:name.txt:1:1:needle:1:2 content", fields[3])
+        self.assertIn("\x1b[31mneedle\x1b[0m", fields[3])
+        display = re.sub(r"\x1b\[[0-9;]*m", "", fields[3])
+        self.assertEqual(display, "colon:name.txt:1:1:needle:1:2 content")
+
+    def test_live_grep_preserves_special_paths_and_escapes_content_controls(self):
+        if not shutil.which("rg"):
+            self.skipTest("ripgrep is needed for live grep")
+        source = self.cwd / "空 格:percent%\\tab\tline\nreset\x1b[0m"
+        source.write_text("unmatched\n前缀\tneedle\\tail\x1b[2J needle\n")
+        result = self.backend("ipre_action_rg_stream", "needle")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        records = result.stdout.splitlines()
+        self.assertEqual(len(records), 1)
+        fields = records[0].split("\t")
+        self.assertEqual(len(fields), 4)
+        self.assertEqual(fields[:3], [path_key(source), "2", "8"])
+        self.assertEqual(fields[3].count("\x1b[31mneedle\x1b[0m"), 2)
+        display = re.sub(r"\x1b\[[0-9;]*m", "", fields[3])
+        self.assertNotIn("\x1b", display)
+        self.assertTrue(display.endswith(r"前缀\tneedle\\tail\x1B[2J needle"))
+
+    def test_live_grep_empty_missing_and_invalid_queries_have_no_records(self):
+        if not shutil.which("rg"):
+            self.skipTest("ripgrep is needed for live grep")
+        (self.cwd / "sample.txt").write_text("needle content\n")
+        for query in ("", "absent", "["):
+            with self.subTest(query=query):
+                result = self.backend("ipre_action_rg_stream", "--", query)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, "")
+
+    def test_live_grep_real_fzf_reload_and_selection(self):
+        if not shutil.which("rg") or not shutil.which("fzf"):
+            self.skipTest("ripgrep and fzf are needed for live grep")
+        directory = self.cwd / "nested"
+        directory.mkdir()
+        source = directory / "colon:name.txt"
+        source.write_text("needle content\n")
+        self.backend(
+            "ipre_action_live_grep", tty=True,
+            responses=((b"Ripgrep", b"needle"), (b"colon:name.txt", b"\r")),
+        )
+        self.assertEqual((self.state / "CWD").read_text().strip(), path_key(directory))
+        self.assertEqual((self.state / "FOCUS").read_text().strip(), path_key(source))
+
+    def test_live_grep_real_fzf_multi_selection_deduplicates_paths(self):
+        if not shutil.which("rg") or not shutil.which("fzf"):
+            self.skipTest("ripgrep and fzf are needed for live grep")
+        first = self.cwd / "first:file.txt"
+        second = self.cwd / "second file.txt"
+        first.write_text("needle one\nneedle two\n")
+        second.write_text("needle three\n")
+        self.backend(
+            "ipre_action_live_grep", tty=True,
+            responses=((b"Ripgrep", b"needle"), (b"3/3", b"\x1ba\r")),
+        )
+        selected = (self.state / "SELECT").read_text().splitlines()
+        self.assertCountEqual(selected, [path_key(first), path_key(second)])
+        self.assertIn((self.state / "FOCUS").read_text().strip(), selected)
+
+    def test_live_grep_real_fzf_switches_to_fuzzy_search(self):
+        if not shutil.which("rg") or not shutil.which("fzf"):
+            self.skipTest("ripgrep and fzf are needed for live grep")
+        source = self.cwd / "colon:name.txt"
+        source.write_text("needle content\n")
+        self.backend(
+            "ipre_action_live_grep", tty=True,
+            responses=((b"Ripgrep", b"needle"), (b"colon:name.txt", b"\x1bf"),
+                       (b"Fuzzy", b"colon\r")),
+        )
+        self.assertEqual((self.state / "FOCUS").read_text().strip(), path_key(source))
 
     def test_live_grep_selection_jumps_to_colon_named_file(self):
         if not shutil.which("rg"):

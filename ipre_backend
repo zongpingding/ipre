@@ -933,6 +933,10 @@ ipre_action_rename() {
 }
 
 ipre_wdired_show_errors() {
+    setopt localoptions localtraps
+    trap 'return 130' INT
+    trap 'return 143' TERM
+    trap 'return 129' HUP
     enter_alt_screen
     {
         print_warn "Wdired Completed with Errors"
@@ -948,201 +952,311 @@ ipre_wdired_show_errors() {
     }
 }
 
-# FIXME: This function is potentially unsafe; there may be edge cases I haven't accounted for.
+# Resolve directory aliases without dereferencing the final entry (a symlink
+# being renamed must remain a symlink). Missing destination parents are allowed.
+ipre_wdired_entry_path() {
+    local entry="${1:a}" parent tail
+    parent="${entry:h}"; tail="${entry:t}"
+    while [[ ! -d "$parent" ]]; do
+        [[ -e "$parent" || -L "$parent" || "$parent" == / ]] && return 1
+        tail="${parent:t}/$tail"
+        parent="${parent:h}"
+    done
+    parent="${parent:A}"
+    REPLY="${parent%/}/$tail"
+}
+
+ipre_wdired_identity() {
+    local -A attrs=()
+    # -L uses lstat here; the link itself is the rename entry.
+    zstat -L -H attrs -- "$1" 2>/dev/null || return 1
+    REPLY="${attrs[device]}:${attrs[inode]}"
+}
+
+ipre_wdired_at() {
+    ipre_wdired_identity "$1" && [[ "$REPLY" == "$2" ]]
+}
+
+# Paths are physical at planning time. Pin their parent directories as well as
+# the entries: a replaced parent must not redirect a later move or cleanup.
+# wdired_dirs is local to the batch, including newly created/staging directories.
+ipre_wdired_watch_dir() {
+    [[ -d "$1" && ! -L "$1" && "${1:A}" == "$1" ]] || return 1
+    ipre_wdired_identity "$1" || return 1
+    [[ -z "${wdired_dirs[$1]}" || "${wdired_dirs[$1]}" == "$REPLY" ]] || return 1
+    wdired_dirs[$1]="$REPLY"
+}
+
+ipre_wdired_check_dir() {
+    [[ -n "${wdired_dirs[$1]}" && -d "$1" && ! -L "$1" && "${1:A}" == "$1" ]] &&
+        ipre_wdired_at "$1" "${wdired_dirs[$1]}"
+}
+
+# wdired_mv_flags is local to the batch; --no-copy is used when supported.
+ipre_wdired_move() {
+    ipre_wdired_check_dir "${1:h}" && ipre_wdired_check_dir "${2:h}" || return 1
+    ipre_wdired_at "$1" "$3" || return 1
+    [[ ! -e "$2" && ! -L "$2" ]] || return 1
+    mv "${wdired_mv_flags[@]}" -- "$1" "$2" || return 1
+    ipre_wdired_check_dir "${1:h}" && ipre_wdired_check_dir "${2:h}" &&
+        [[ ! -e "$1" && ! -L "$1" ]] && ipre_wdired_at "$2" "$3"
+}
+
 ipre_action_wdired() {
-    cd "$IPRE_CWD" || exit 0
-    [[ $# -eq 0 || -z "$1" ]] && exit 0
-    local tmpfile
+    cd -- "$IPRE_CWD" || return 1
+    (( $# )) || return 0
+    setopt localoptions localtraps
+    zmodload zsh/stat || return 1
+    local tmpfile item source_path line id new_name clean_new parent stage_dir
+    local i j o n expected editor_spec="${EDITOR:-nvim}" failed=0 interrupted=0 complete=0
+    local -a sources=() identities=() valid_olds=() valid_news=() valid_ids=()
+    local -a stage_dirs=() stage_paths=() locations=() created_dirs=() pending_dirs=() errors=()
+    local -a editor_args=("${(@Q)${(z)editor_spec}}") wdired_mv_flags=(-nT)
+    local -A seen_sources=() row_sources=() seen_rows=() old_set=() new_set=() wdired_dirs=()
+    (( ${#editor_args} )) || return 1
+    [[ "$(command mv --help 2>/dev/null)" == *--no-copy* ]] && wdired_mv_flags+=(--no-copy)
     tmpfile=$(mktemp) || return 1
+    # Cover the editor too: cancellation must clean up the edit file and must
+    # never apply a partially saved edit. During moves, defer until tracked.
+    trap 'interrupted=130' INT
+    trap 'interrupted=143' TERM
+    trap 'interrupted=129' HUP
     {
-        cat << 'EOF' > "$tmpfile"
+        cat << 'HEADER' > "$tmpfile"
 # === Wdired Batch Rename ===
-# Edit the name after the TAB on each [id] row. Keep the identifiers.
+# Edit the name after the TAB on each [id] row. Keep every identifier exactly.
 # Source paths are comments; the actual source is fixed by its identifier.
 # Escapes: \\ for backslash, \n for newline, \t for tab, \xHH for a byte.
 # New names are relative to each selected item's parent directory.
-# Save and exit to apply. Delete all text to abort.
-# NOTE: use 'C-v TAB'(vim/nvim) or 'C-q TAB'(emacs) to insert a literal TAB key.
-# WARN: This function is potentially unsafe; there may be edge cases I haven't accounted for.
+# Empty names skip rows. Delete all rows to cancel the entire batch.
+# Save and exit to apply. Any validation error cancels the entire batch.
+# Rename directories and their selected children in separate batches.
+# Cross-filesystem moves are not supported by batch rename.
 
-EOF
-
-        local item source_path prefix line id new_name clean_new target_dir REPLY
-        local -a sources=() prefixes=() errors=() valid_olds=() valid_news=()
-        local -A seen_sources=() seen_rows=() old_set=() new_set=()
+HEADER
+        # Capture entry identity before the editor opens, not after it closes.
         for item in "$@"; do
-            source_path="${item:a}"
-            [[ -e "$source_path" || -L "$source_path" ]] || continue
+            [[ -n "$item" ]] || continue
+            if ! ipre_wdired_entry_path "$item" || [[ "$REPLY" == / ]]; then
+                errors+=("Invalid source: $item")
+                continue
+            fi
+            source_path="$REPLY"
             [[ -n "${seen_sources[$source_path]}" ]] && continue
+            if ! ipre_wdired_watch_dir "${source_path:h}" || ! ipre_wdired_identity "$source_path"; then
+                errors+=("Source is unavailable: $item")
+                continue
+            fi
             seen_sources[$source_path]=1
-            sources+=("$source_path")
-            prefix="[${#sources[@]}]"$'\t'
-            prefixes+=("$prefix")
+            sources+=("$source_path"); identities+=("$REPLY")
+            id="${#sources}"; row_sources[$id]="$source_path"
             ipre_text_escape "$item"
-            printf '# [%d] Source: %s\n' "${#sources[@]}" "$REPLY" >> "$tmpfile"
+            printf '# [%d] Source: %s\n' "$id" "$REPLY" >> "$tmpfile"
             ipre_text_escape "${source_path:t}"
-            printf '%s%s\n' "$prefix" "$REPLY" >> "$tmpfile"
+            printf '[%d]\t%s\n' "$id" "$REPLY" >> "$tmpfile"
         done
-        if (( ${#errors[@]} )); then
+        if (( ${#errors} )); then
             ipre_wdired_show_errors "${errors[@]}"
             return 1
         fi
-        (( ${#sources[@]} )) || return 0
-        ${EDITOR:-nvim} -c "set listchars=tab:>\ |set list" "$tmpfile" </dev/tty >/dev/tty || return 1
+        (( ${#sources} )) || return 0
+        (( interrupted )) && return "$interrupted"
+        case "${editor_args[1]:t}" in
+            vi|vim|nvim|gvim) editor_args+=(-c 'set listchars=tab:>\ |set list') ;;
+        esac
+        "${editor_args[@]}" "$tmpfile" </dev/tty >/dev/tty || failed=1
+        (( interrupted )) && return "$interrupted"
+        (( failed )) && return 1
+        [[ -f "$tmpfile" && -r "$tmpfile" ]] || return 1
         local -a tmp_lines=("${(@f)$(<"$tmpfile")}")
-
-        # The editable text can never supply a new source path.
         for line in "${tmp_lines[@]}"; do
+            # Accept CRLF editor files. A literal CR in a name uses \\r.
+            line="${line%$'\r'}"
             [[ -z "$line" || "$line" == \#* ]] && continue
             if [[ "$line" != \[<->\]$'\t'* ]]; then
                 errors+=("Invalid batch rename row: $line")
                 continue
             fi
             id="${${line#\[}%%\]*}"
-            if (( id < 1 || id > ${#sources[@]} )) || [[ -n "${seen_rows[$id]}" ]]; then
+            # Lookup the exact text first; never evaluate an untrusted numeric ID.
+            if [[ -z "${row_sources[$id]}" || -n "${seen_rows[$id]}" ]]; then
                 errors+=("Invalid or repeated batch rename identifier: $id")
                 continue
             fi
             seen_rows[$id]=1
-            prefix="${prefixes[$id]}"
-            if [[ "$line" != "$prefix"* ]]; then
-                errors+=("The identifier or TAB on row $id was changed")
-                continue
-            fi
-            source_path="${sources[$id]}"
-            if ! ipre_text_unescape "${line#"$prefix"}"; then
+            source_path="${row_sources[$id]}"
+            if ! ipre_text_unescape "${line#*$'\t'}"; then
                 errors+=("Invalid name escape on row $id")
                 continue
             fi
             new_name="$REPLY"
-            [[ -z "$new_name" ]] && continue
-            if [[ ! -d "$source_path" || -L "$source_path" ]]; then
-                if [[ "$new_name" == */ ]]; then
-                    errors+=("Cannot rename '$source_path' to a path ending with '/'")
-                    continue
-                fi
+            [[ -n "$new_name" ]] || continue
+            if [[ ( ! -d "$source_path" || -L "$source_path" ) && "$new_name" == */ ]]; then
+                errors+=("Cannot rename '$source_path' to a path ending with '/'")
+                continue
             fi
             ipre_rename_target_path "$source_path" "$new_name"
+            if ! ipre_wdired_entry_path "$REPLY"; then
+                errors+=("Invalid destination parent on row $id: $new_name")
+                continue
+            fi
             clean_new="$REPLY"
             [[ "$clean_new" == "$source_path" ]] && continue
             if [[ -n "${new_set[$clean_new]}" ]]; then
                 errors+=("Multiple files target '$clean_new'")
                 continue
             fi
-            valid_olds+=("$source_path")
-            valid_news+=("$clean_new")
-            old_set[$source_path]=1
-            new_set[$clean_new]=1
+            valid_olds+=("$source_path"); valid_news+=("$clean_new"); valid_ids+=("${identities[id]}")
+            old_set[$source_path]=1; new_set[$clean_new]=1
         done
-        # A blank edit aborts; a partially damaged edit must not move any files.
-        if (( ${#seen_rows[@]} == 0 && ${#errors[@]} == 0 )); then
+        if (( ! ${#seen_rows} && ! ${#errors} )); then
             return 0
         fi
-        local i o n
-        for (( i=1; i<=${#sources[@]}; i++ )); do
+        for (( i=1; i<=${#sources}; i++ )); do
             [[ -n "${seen_rows[$i]}" ]] || errors+=("Batch rename row $i is missing")
         done
-        if (( ${#errors[@]} )); then
-            ipre_wdired_show_errors "${errors[@]}"
-            return 1
-        fi
-
-        # Prevent staging a parent directory from invalidating another row's paths.
+        # Include unchanged selected children: moving their parent still moves them.
         for o in "${valid_olds[@]}" "${valid_news[@]}"; do
-            for n in "${valid_olds[@]}" "${valid_news[@]}"; do
+            for n in "${sources[@]}" "${valid_news[@]}"; do
                 if [[ "$n" == "$o/"* ]]; then
                     errors+=("Rename a directory and its children in separate batches: '$o', '$n'")
                     break 2
                 fi
             done
         done
-        if (( ${#errors[@]} )); then
+        for (( i=1; i<=${#valid_olds}; i++ )); do
+            o="${valid_olds[i]}"; n="${valid_news[i]}"; expected="${valid_ids[i]}"
+            ipre_wdired_check_dir "${o:h}" || errors+=("Source parent changed while editing: ${o:h}")
+            ipre_wdired_at "$o" "$expected" || errors+=("Source changed while editing: $o")
+            if [[ -d "$o" && ! -L "$o" && ( "${PWD:A}" == "$o" || "${PWD:A}" == "$o/"* ) ]]; then
+                errors+=("Cannot rename the working directory or its ancestors: $o")
+            fi
+            if [[ ( -e "$n" || -L "$n" ) && -z "${old_set[$n]}" ]]; then
+                errors+=("Destination already exists: $n")
+            fi
+            parent="${n:h}"
+            while [[ ! -d "$parent" ]]; do parent="${parent:h}"; done
+            if ! ipre_wdired_watch_dir "$parent"; then
+                errors+=("Destination parent changed: $parent")
+            elif [[ "$REPLY" != "${expected%%:*}:"* ]]; then
+                errors+=("Cross-filesystem batch move is unsupported: $o -> $n")
+            fi
+        done
+        if (( ${#errors} )); then
             ipre_wdired_show_errors "${errors[@]}"
             return 1
         fi
+        (( ${#valid_olds} )) || return 0
 
-        # Remove blocked rows repeatedly so swaps and dependency chains stay safe.
-        local changed=1
-        local -a next_olds=() next_news=()
-        while (( changed )); do
-            changed=0
-            next_olds=() next_news=()
-            for (( i=1; i<=${#valid_olds[@]}; i++ )); do
-                o="${valid_olds[$i]}"
-                n="${valid_news[$i]}"
-                if [[ ( -e "$n" || -L "$n" ) && -z "${old_set[$n]}" ]]; then
-                    errors+=("'$n' blocks the rename of '$o'")
-                    unset "old_set[$o]"
-                    changed=1
-                else
-                    next_olds+=("$o")
-                    next_news+=("$n")
-                fi
+        (( interrupted )) && return "$interrupted"
+        for n in "${valid_news[@]}"; do
+            parent="${n:h}"; pending_dirs=()
+            while [[ ! -d "$parent" ]]; do
+                pending_dirs+=("$parent"); parent="${parent:h}"
             done
-            valid_olds=("${next_olds[@]}")
-            valid_news=("${next_news[@]}")
-        done
-
-        # Reserve temporary directories beside each source before moving anything.
-        local stage_dir failed=0 staged=0 committed=0
-        local -a stage_dirs=() stage_paths=()
-        for o in "${valid_olds[@]}"; do
-            if ! stage_dir=$(mktemp -d -- "${o:h}/.ipre-rename.XXXXXX"); then
-                errors+=("Cannot reserve a temporary path for '$o'")
-                failed=1
-                break
+            if ! ipre_wdired_check_dir "$parent"; then
+                errors+=("Destination parent changed: $parent"); failed=1; break
             fi
-            stage_dirs+=("$stage_dir")
-            stage_paths+=("$stage_dir/${o:t}")
+            for (( j=${#pending_dirs}; j>=1; j-- )); do
+                ipre_wdired_check_dir "${pending_dirs[j]:h}" || { failed=1; break; }
+                if ! mkdir -- "${pending_dirs[j]}"; then failed=1; break; fi
+                created_dirs+=("${pending_dirs[j]}")
+                ipre_wdired_watch_dir "${pending_dirs[j]}" || { failed=1; break; }
+            done
+            (( failed || interrupted )) && break
         done
-        if (( ! failed )); then
-            for (( i=1; i<=${#valid_olds[@]}; i++ )); do
-                if ! ipre_rename_move "${valid_olds[$i]}" "${stage_paths[$i]}"; then
-                    errors+=("Failed to stage '${valid_olds[$i]}'")
-                    failed=1
-                    break
-                fi
-                (( ++staged ))
+        if (( ! failed && ! interrupted )); then
+            for o in "${valid_olds[@]}"; do
+                ipre_wdired_check_dir "${o:h}" || { failed=1; break; }
+                if ! stage_dir=$(mktemp -d -- "${o:h}/.ipre-rename.XXXXXX"); then failed=1; break; fi
+                stage_dirs+=("$stage_dir"); stage_paths+=("$stage_dir/item"); locations+=(0)
+                ipre_wdired_watch_dir "$stage_dir" || { failed=1; break; }
+                i="${#stage_dirs}"
+                # Keep a recovery map alongside every payload, even after SIGKILL.
+                if ! {
+                    ipre_text_escape "$o"; printf 'Original: %s\n' "$REPLY"
+                    ipre_text_escape "${valid_news[i]}"; printf 'Destination: %s\n' "$REPLY"
+                    printf '%s\n' 'Payload: item' 'Paths use \\, \n, \t and \xHH escapes.'
+                } > "$stage_dir/recovery.txt"; then failed=1; break; fi
+                (( interrupted )) && break
             done
         fi
-        if (( ! failed )); then
-            for (( i=1; i<=${#valid_news[@]}; i++ )); do
-                target_dir="${valid_news[$i]:h}"
-                if ! mkdir -p -- "$target_dir" ||
-                   ! ipre_rename_move "${stage_paths[$i]}" "${valid_news[$i]}"; then
-                    errors+=("Failed to rename '${valid_olds[$i]}' to '${valid_news[$i]}'")
-                    failed=1
-                    break
-                fi
-                (( ++committed ))
+        if (( ! failed && ! interrupted )); then
+            for (( i=1; i<=${#valid_olds}; i++ )); do
+                ipre_wdired_move "${valid_olds[i]}" "${stage_paths[i]}" "${valid_ids[i]}" || failed=1
+                ipre_wdired_at "${stage_paths[i]}" "${valid_ids[i]}" && locations[i]=1
+                (( failed || interrupted )) && break
             done
         fi
-        if (( failed )); then
-            # Move committed rows back to staging first, then restore original paths.
-            for (( i=committed; i>=1; i-- )); do
-                ipre_rename_move "${valid_news[$i]}" "${stage_paths[$i]}" ||
-                    errors+=("Rollback failed; data remains at '${valid_news[$i]}'")
+        if (( ! failed && ! interrupted )); then
+            for (( i=1; i<=${#valid_news}; i++ )); do
+                ipre_wdired_move "${stage_paths[i]}" "${valid_news[i]}" "${valid_ids[i]}" || failed=1
+                ipre_wdired_at "${valid_news[i]}" "${valid_ids[i]}" && locations[i]=2
+                (( failed || interrupted )) && break
             done
-            for (( i=staged; i>=1; i-- )); do
-                if [[ -e "${stage_paths[$i]}" || -L "${stage_paths[$i]}" ]]; then
-                    ipre_rename_move "${stage_paths[$i]}" "${valid_olds[$i]}" ||
-                        errors+=("Rollback failed; data remains at '${stage_paths[$i]}'")
-                fi
-            done
-        elif (( ${#valid_news[@]} )); then
+        fi
+        if (( ! failed && ! interrupted )); then
+            complete=1
             ipre_rename_set_focus "${valid_news[1]}"
         fi
-        for stage_dir in "${stage_dirs[@]}"; do
-            rmdir -- "$stage_dir" 2>/dev/null
-        done
-        if (( ${#errors[@]} )); then
-            ipre_wdired_show_errors "${errors[@]}"
-            return 1
-        fi
-        return 0
     } always {
+        if (( ${#stage_dirs} || ${#created_dirs} )); then
+            # Let recovery finish even if another cancellation key arrives.
+            trap '' INT TERM HUP
+            if (( ! complete )); then
+                errors+=("Batch rename did not complete; attempting rollback.")
+                # Vacate every committed destination before restoring originals (swaps).
+                for (( i=${#stage_dirs}; i>=1; i-- )); do
+                    if [[ "${locations[i]}" == 2 ]]; then
+                        ipre_wdired_move "${valid_news[i]}" "${stage_paths[i]}" "${valid_ids[i]}"
+                        if ipre_wdired_at "${stage_paths[i]}" "${valid_ids[i]}"; then
+                            locations[i]=1
+                        else
+                            errors+=("Rollback failed; check destination '${valid_news[i]}' and '${stage_dirs[i]}/recovery.txt'")
+                        fi
+                    fi
+                done
+                for (( i=${#stage_dirs}; i>=1; i-- )); do
+                    if [[ "${locations[i]}" == 1 ]]; then
+                        ipre_wdired_move "${stage_paths[i]}" "${valid_olds[i]}" "${valid_ids[i]}"
+                        if ipre_wdired_at "${valid_olds[i]}" "${valid_ids[i]}" && [[ ! -e "${stage_paths[i]}" && ! -L "${stage_paths[i]}" ]]; then
+                            locations[i]=0
+                        else
+                            errors+=("Rollback failed; original data retained at '${stage_paths[i]}'; see recovery.txt beside it")
+                        fi
+                    fi
+                done
+            fi
+            for (( i=1; i<=${#stage_dirs}; i++ )); do
+                if ! ipre_wdired_check_dir "${stage_dirs[i]}"; then
+                    errors+=("Staging directory changed; check '${stage_dirs[i]}' and its recovery.txt")
+                elif [[ -e "${stage_paths[i]}" || -L "${stage_paths[i]}" ]]; then
+                    errors+=("Staged entry retained at '${stage_paths[i]}'; see recovery.txt beside it")
+                elif (( complete )) || [[ "${locations[i]}" == 0 ]]; then
+                    rm -f -- "${stage_dirs[i]}/recovery.txt"
+                    rmdir -- "${stage_dirs[i]}" 2>/dev/null
+                fi
+            done
+            if (( ! complete )); then
+                for (( i=${#created_dirs}; i>=1; i-- )); do
+                    ipre_wdired_check_dir "${created_dirs[i]}" && rmdir -- "${created_dirs[i]}" 2>/dev/null
+                done
+            fi
+        fi
         rm -f -- "$tmpfile"
     }
+    if (( interrupted )); then
+        for item in "${errors[@]}"; do
+            ipre_text_escape "$item"; printf '%s\n' "$REPLY" >&2
+        done
+        return "$interrupted"
+    fi
+    if (( failed || ${#errors} )); then
+        (( ${#errors} )) || errors+=("Cannot prepare batch rename; no files were moved.")
+        ipre_wdired_show_errors "${errors[@]}"
+        return 1
+    fi
+    return 0
 }
 
 
