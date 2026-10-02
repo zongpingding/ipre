@@ -15,6 +15,8 @@ provided by `pre`.
 - [Setup](#setup)
 - [Usage](#usage)
 - [Keybindings](#keybindings)
+  - [Live grep / live picker](#live-grep--live-picker)
+  - [Buffer Manager](#buffer-manager)
 - [Browsing and file operations](#browsing-and-file-operations)
 - [Opening files](#opening-files)
 - [Configuration](#configuration)
@@ -150,79 +152,242 @@ pre get_file_type report.pdf  # Print the detected type without rendering
 
 ## Keybindings
 
-### Navigation and display
+Keys are grouped by **where you use them**. The main browser and live grep picker
+have separate bindings; for example, `Alt+d` trashes files in the browser but
+clears result selections in live grep. `Alt` means hold Alt while pressing the
+named key; `` Alt+` `` means Alt + backtick, and `Alt++` means Alt + the `+` character.
+These tables describe the shipped bindings and fzf defaults; your
+`FZF_DEFAULT_OPTS` / `FZF_DEFAULT_OPTS_FILE` may customize inherited defaults.
 
-| Key               | Action                                                                         |
-|-------------------|--------------------------------------------------------------------------------|
-| `Ctrl+q`          | Exit without requesting a shell directory change                               |
-| `Alt+q`           | Exit into the viewed directory when using the shell wrapper                    |
-| `Enter`           | Accept files or a directory; see [Setup](#setup) for directory behavior        |
-| `Left` / `Right`  | Navigate to the parent / selected directory; Right on a file visits its parent |
-| `F2` / `F3`       | Go back / forward in directory history                                         |
-| `Alt+e`           | Toggle compact / detailed listing                                              |
-| Backtick          | Cycle all / files / directories                                                |
-| `Alt+.`           | Toggle hidden files                                                            |
-| `Alt+0` … `Alt+9` | Set search depth; `0` means unlimited                                          |
-| `Alt+-` / `Alt+=` | Decrease / increase search depth                                               |
-| `Alt+o`           | Cycle sorting by name / time / size / extension                                |
-| `Alt+p`           | Toggle the preview pane                                                        |
-| `F4` / `F5`       | Shrink / grow the preview by 10 percentage points (20%–80%)                     |
-| `F6`              | Switch between side-by-side and stacked preview layouts                        |
-| `Alt+f` / `Alt+b` | Next / previous PDF or DjVu page; otherwise scroll the preview down / up       |
-| `Alt+?`           | Show built-in help                                                             |
+- **Main browser:** [Navigation](#main-browser-navigation),
+  [listing and filters](#main-browser-listing-and-filters),
+  [preview](#main-browser-preview), [selection](#main-browser-selection-and-buffers),
+  [file operations](#main-browser-file-operations), [search and commands](#main-browser-search-and-commands).
+- **Other interfaces:** [Live grep / live picker](#live-grep--live-picker),
+  [Buffer Manager](#buffer-manager), [menus and prompts](#other-menus-and-prompts).
+- **Shared controls:** [Query editing](#query-editing-fzf-defaults).
 
-### Selection and file operations
+### Main browser: navigation
 
-| Key                         | Action                                                    |
-|-----------------------------|-----------------------------------------------------------|
-| `Tab` / `Shift+Tab`         | Toggle an item and move down / up                         |
-| `Alt+a`                     | Toggle selection of all matching items                    |
-| `Alt+s`                     | Save items in the cross-directory selection buffer        |
-| `Alt+i`                     | Inspect and edit the selection and file clipboard buffers |
-| `Alt+c` / `Alt+x` / `Alt+v` | Copy / cut / paste files                                  |
-| `Alt+y`                     | Copy absolute paths to the system clipboard               |
-| `Alt+r`                     | Rename selected items interactively                       |
-| `Alt+w`                     | Edit selected names together in the batch rename editor   |
-| `Alt+n`                     | Create a file or directory                                |
-| `Alt+d`                     | Move selected items to the trash                          |
-| `Alt+m`                     | Bookmark selected items                                   |
-| `Alt+/`                     | Open bookmarks                                            |
-| `Alt++`                     | Diff exactly two files from the saved selection buffer    |
+| Key                              | Action                                                                           |
+|----------------------------------|----------------------------------------------------------------------------------|
+| `Up` / `Down`                    | Move to the previous / next item                                                 |
+| `Ctrl+k` / `Ctrl+p` / `Alt+Up`   | Move to the previous item                                                        |
+| `Ctrl+j` / `Ctrl+n` / `Alt+Down` | Move to the next item                                                            |
+| `PageUp` / `PageDown`            | Move through the list one screen at a time                                       |
+| `Left` / `Right`                 | Visit the parent / focused directory; Right on a file visits its parent          |
+| `F2` / `F3`                      | Go back / forward in directory history                                           |
+| `Enter`                          | Accept marked items, or the focused item if none are marked; open files and exit |
+| `Enter` with `--keep-open`       | Open files and keep browsing; directories leave the browser open                 |
+| `Ctrl+q` / `Ctrl+c` / `Ctrl+g`   | Exit without requesting a shell directory change                                 |
+| `Alt+q`                          | Exit and request a shell directory change to the viewed directory                |
+| `Esc`                            | Ignored in the main browser                                                      |
+| `Alt+?`                          | Show built-in help; press any key to return                                      |
 
-### Search and commands
+Accepting a single directory with `Enter` requests a shell directory change;
+`Alt+q` requests the viewed directory instead. Both require the
+[shell wrapper](#change-the-shell-directory-on-exit). With `--keep-open`,
+use `Right` to enter a directory.
 
-| Key         | Action                                 |
-|-------------|----------------------------------------|
-| `Alt+g`     | Search file contents with ripgrep      |
-| `Alt+t`     | Jump to a directory using zoxide       |
-| `Alt+;`     | Open grug-far with the ripgrep engine  |
-| `Alt+'`     | Open grug-far with the ast-grep engine |
-| `Alt+Space` | Open the command palette               |
+### Main browser: listing and filters
 
-Inside the live grep picker, `Alt+f` switches to fuzzy filtering and `Alt+r`
-returns to ripgrep search. `Ctrl+f` / `Ctrl+b` scroll its preview.
-`Alt+e` opens the results in Vim/Neovim's Quickfix list; `Alt+y` copies their
-locations as `relative/path:line:column:` lines using `CLIPBOARD` (default
-`wl-copy`). Both actions use the marked items when there are any, otherwise
-all currently matching items, including those offscreen. Fuzzy filtering is
-respected, and different matches in the same file remain separate entries.
+Typing in the main query filters **filenames**. Use `Alt+g` for file contents.
+
+| Key                          | Action                                                                          |
+|------------------------------|---------------------------------------------------------------------------------|
+| `Alt+e`                      | Toggle compact / detailed listing                                               |
+| `` Alt+` `` (Alt + backtick) | Cycle all → files → directories → all                                           |
+| `Alt+.`                      | Toggle hidden files; initially shown                                            |
+| `Alt+1` … `Alt+9`            | Set search depth to 1 … 9                                                       |
+| `Alt+0`                      | Set unlimited search depth                                                      |
+| `Alt+-` / `Alt+=`            | Decrease / increase depth by 1; depth never goes below 0, and 0 means unlimited |
+| `Alt+o`                      | Cycle sorting by name → modification time → size → extension → name             |
+
+### Main browser: preview
+
+| Key                       | Action                                                                                           |
+|---------------------------|--------------------------------------------------------------------------------------------------|
+| `Alt+p`                   | Show / hide the preview pane                                                                     |
+| `F4` / `F5`               | Shrink / grow the preview by 10 percentage points, within 20%–80%                                |
+| `F6`                      | Switch between side-by-side and stacked preview layouts                                          |
+| `Alt+f` / `Alt+b`         | Next / previous PDF or DjVu page; for other content, scroll the preview down / up by half a page |
+| `Shift+Down` / `Shift+Up` | Scroll the preview down / up by one line (fzf default)                                           |
+
+`F4` / `F5` adjust width in the side-by-side layout and height in the stacked
+layout. `F6` retains the chosen percentage. These geometry keys apply to the
+main browser and refresh the preview at its new size.
+
+### Main browser: selection and buffers
+
+**Marked items** are the current fzf multi-selection. **SEL** is the saved
+cross-directory selection (`Alt+s`); **CLIP** is ipre's file copy/cut buffer
+(`Alt+c` / `Alt+x`), separate from the system clipboard. File actions generally
+use marked items, or the focused item when none are marked. `Alt+r` and the
+command palette additionally merge SEL, removing duplicate paths.
+
+| Key                 | Action                                                                            |
+|---------------------|-----------------------------------------------------------------------------------|
+| `Tab` / `Shift+Tab` | Toggle the focused item's mark and move down / up                                 |
+| `Alt+a`             | Toggle selection of all currently matching items                                  |
+| `Alt+s`             | Add marked items (or the focused item) to SEL, then clear current marks           |
+| `Alt+i`             | Open [Buffer Manager](#buffer-manager) to inspect or edit SEL and CLIP            |
+| `Alt++`             | Diff exactly two files saved in SEL using `EDITOR -d`; clears SEL after returning |
+
+### Main browser: file operations
+
+| Key               | Action                                                                    |
+|-------------------|---------------------------------------------------------------------------|
+| `Alt+c` / `Alt+x` | Copy / cut selected paths into CLIP, then clear current marks             |
+| `Alt+v`           | Paste CLIP into the viewed directory                                      |
+| `Alt+y`           | Copy absolute paths to the **system clipboard**, then clear current marks |
+| `Alt+r`           | Rename current items + SEL interactively, deduplicating paths             |
+| `Alt+w`           | Batch rename current items in the name editor                             |
+| `Alt+n`           | Create files or directories; names ending in `/` create directories       |
+| `Alt+d`           | Move current items to the trash                                           |
+| `Alt+m`           | Bookmark current items                                                    |
+| `Alt+/`           | Open the bookmarks picker                                                 |
+
+### Main browser: search and commands
+
+| Key         | Action                                                                                       |
+|-------------|----------------------------------------------------------------------------------------------|
+| `Alt+g`     | Open [live grep / live picker](#live-grep--live-picker) to search file contents with ripgrep |
+| `Alt+t`     | Jump to a directory using the zoxide picker                                                  |
+| `Alt+;`     | Open grug-far with the ripgrep engine                                                        |
+| `Alt+'`     | Open grug-far with the ast-grep engine                                                       |
+| `Alt+Space` | Open the [command palette](#command-palette-details)                                         |
+
+ipre does not bind `Alt+h` / `Alt+j` / `Alt+k` / `Alt+l`, leaving them available
+for system-level mappings.
+
+### Live grep / live picker
+
+Open with `Alt+g` from the main browser. The initial **Ripgrep >** mode searches
+file contents under the viewed directory as you type. **Fuzzy >** filters the
+loaded result list without running a new content search. Query editing follows
+[the shared fzf defaults](#query-editing-fzf-defaults), with the overrides below.
+
+| Group       | Key                                    | Action inside live grep                                                                             |
+|-------------|----------------------------------------|-----------------------------------------------------------------------------------------------------|
+| Search mode | `Alt+f`                                | Switch to fuzzy filtering of loaded results; clears the query input                                 |
+| Search mode | `Alt+r`                                | Return to ripgrep search; clears the query input and reloads results                                |
+| Navigation  | `Up` / `Down`                          | Move to the previous / next result                                                                  |
+| Navigation  | `Ctrl+k` / `Ctrl+p` / `Alt+Up`         | Move to the previous result                                                                         |
+| Navigation  | `Ctrl+j` / `Ctrl+n` / `Alt+Down`       | Move to the next result                                                                             |
+| Navigation  | `PageUp` / `PageDown`                  | Move through results one screen at a time                                                           |
+| Selection   | `Tab` / `Shift+Tab`                    | Toggle the focused result's mark and move down / up                                                 |
+| Selection   | `Alt+a`                                | Toggle selection of all currently matching results                                                  |
+| Selection   | `Alt+d`                                | Deselect all currently matching results                                                             |
+| Preview     | `Ctrl+f` / `Ctrl+b`                    | Scroll the preview down / up by half a page                                                         |
+| Preview     | `Shift+Down` / `Shift+Up`              | Scroll the preview down / up by one line (fzf default)                                              |
+| Edit        | `Alt+e`                                | Edit marked results (otherwise all matches) in Quickfix; closing the editor returns here            |
+| Copy        | `Alt+y`                                | Copy marked locations (otherwise all matches) as `relative/path:line:column:`; keep the picker open |
+| Accept      | `Enter`                                | Accept marked results, or the focused result if none are marked, and return to the main browser     |
+| Cancel      | `Esc` / `Ctrl+q` / `Ctrl+c` / `Ctrl+g` | Close live grep and return to the main browser                                                      |
+
+`Enter` visits the first accepted file's parent and focuses that file. If the
+accepted results span multiple distinct files, those files are also added to SEL.
+It does not open the editor; use `Alt+e` to edit matching locations.
+
+**Export scope (`Alt+e` / `Alt+y`):** marked results take priority; otherwise,
+all currently matching results are used, including those offscreen. Exports
+respect fuzzy filtering and retain separate matches within the same file.
+Copying uses `CLIPBOARD` (default `wl-copy`). Paths outside the viewed directory
+remain absolute; backslashes and control characters use the usual ipre escapes.
+Quickfix receives exact paths separately from display text. Status and errors
+appear in the picker header.
+
+Editing returns to the same query, marks, and filtered list. The result list
+is a snapshot: after editing files, use `Alt+r` and enter a query to search again.
+
+#### Quickfix editor commands
 
 Quickfix supports `EDITOR=nvim`, `vim`, or `vi` backed by Vim, including quoted
 executable paths and options. It opens the first matching location and the
-result list. Save changes with `:w`, use `:cnext` / `:cprev` for adjacent
-locations or `:cnfile` for the next file, and use `:qa` to leave the editor.
-Closing the editor returns to the same live grep query, marks and filtered
-list. This list is a snapshot; after edits, use `Alt+r` and enter a query to
-search the updated files. Copying locations also keeps the picker open.
-Quickfix receives exact paths separately from display text. Clipboard paths
-use the usual ipre escapes for backslashes and control characters; paths
-outside the current directory remain absolute. Status and errors appear in
-the picker header.
+result list. These are **editor commands**, entered after leaving Insert mode
+with `Esc`:
+
+| Command             | Action in Vim / Neovim                                       |
+|---------------------|--------------------------------------------------------------|
+| `:w`                | Save the current file                                        |
+| `:cnext` / `:cprev` | Go to the next / previous matching location                  |
+| `:cnfile`           | Go to the first matching location in the next file           |
+| `:qa`               | Close the editor and return to live grep; save changes first |
+
+### Buffer Manager
+
+Open with `Alt+i` from the main browser. These are **single-character keys**,
+without Alt; letter keys also accept uppercase. SEL and CLIP refer to the
+buffers described [above](#main-browser-selection-and-buffers).
+
+| Key                          | Action inside Buffer Manager                                                                                 |
+|------------------------------|--------------------------------------------------------------------------------------------------------------|
+| `p`                          | Print both buffers' paths; press any key to return to the manager                                            |
+| `t`                          | Toggle CLIP's operation between COPY and CUT                                                                 |
+| `>` / `<`                    | Merge SEL into CLIP / CLIP into SEL, then clear the source buffer                                            |
+| `,` / `.`                    | Merge SEL into CLIP / CLIP into SEL, keeping the source buffer                                               |
+| `1`                          | Clear both buffers                                                                                           |
+| `2` / `3`                    | Clear CLIP / SEL                                                                                             |
+| `s`                          | Pick a saved SEL item and jump to its directory in the main browser; focus it if it is a file                |
+| `v`; `:v` / `/vim` + `Enter` | Edit both buffers with `EDITOR`; closing the editor applies the buffer edits and returns to the main browser |
+| `q` / `Enter`                | Close the manager and return to the main browser                                                             |
+
+### Other menus and prompts
+
+Bookmarks, zoxide, the command palette, **Open with...**, command history, and
+trash restoration use separate fzf menus. Type to filter, use `Up` / `Down`
+to move, `Enter` to accept, and `Esc` / `Ctrl+q` / `Ctrl+c` / `Ctrl+g` to cancel
+that menu. Trash restoration also supports multi-selection with `Tab` /
+`Shift+Tab`. The main browser's custom Alt bindings do not apply to these menus.
+
+| Context                                        | Key / input              | Action                                                                                                     |
+|------------------------------------------------|--------------------------|------------------------------------------------------------------------------------------------------------|
+| Create / rename prompt                         | `Enter`                  | Submit the typed name(s)                                                                                   |
+| Create / rename prompt                         | Empty input + `Enter`    | Cancel creation / skip the current rename item; clear input first (`Ctrl+u` in Emacs-style prompt editing) |
+| Create / rename prompt                         | `:q` or `/q` + `Enter`   | Cancel creation / abort the remaining rename batch                                                         |
+| Create prompt                                  | `:v` or `/vim` + `Enter` | Open the batch creation editor                                                                             |
+| Batch creation editor                          | `:wq` / `:q!`            | Save and apply / quit without saving; delete all item rows to cancel                                       |
+| Execute shell command: mode choice             | `b` / `n`                | Run in the foreground and wait / dispatch in the background (uppercase also accepted)                      |
+| Help or command output showing “Press any key” | Any key                  | Return to the previous interface                                                                           |
+
+Text prompts use zsh's `vared` editor and its active keymap; they do not use the
+browser's Alt bindings. Batch rename and external editors use their own editor
+keymaps. See [Rename](#rename) for batch rename's save and validation rules.
+
+### Query editing (fzf defaults)
+
+These edit the query in the main browser, live grep, and other fzf menus unless
+a context-specific binding overrides them. In the main browser, `Left` /
+`Right` navigate directories and `Alt+b` / `Alt+f` control the preview. In live
+grep, `Ctrl+b` / `Ctrl+f` control the preview, `Alt+f` changes search mode, and
+`Alt+d` clears result selections.
+
+| Key                                                    | Action / scope                                                                                           |
+|--------------------------------------------------------|----------------------------------------------------------------------------------------------------------|
+| `Ctrl+a` / `Home`                                      | Move to the beginning of the query                                                                       |
+| `Ctrl+e` / `End`                                       | Move to the end of the query                                                                             |
+| `Ctrl+b` / `Ctrl+f`                                    | Move the query cursor left / right; main browser and ordinary menus only                                 |
+| `Left` / `Right`                                       | Move the query cursor left / right; live grep and ordinary menus only                                    |
+| `Shift+Left` / `Alt+Left`; `Shift+Right` / `Alt+Right` | Move the query cursor one word left / right                                                              |
+| `Alt+b`                                                | Move the query cursor one word left; live grep and ordinary menus only                                   |
+| `Alt+f`                                                | Move the query cursor one word right; ordinary menus only                                                |
+| `Backspace` / `Ctrl+h` / `Ctrl+Backspace`              | Delete the character before the query cursor                                                             |
+| `Delete`                                               | Delete the character at the query cursor                                                                 |
+| `Ctrl+d`                                               | Delete at the query cursor; when the query is empty, exit the browser / cancel the current picker        |
+| `Ctrl+u`                                               | Delete the query text before the cursor                                                                  |
+| `Ctrl+w` / `Alt+Backspace`                             | Delete the word before the query cursor                                                                  |
+| `Alt+d`                                                | Delete the word after the query cursor; ordinary menus only                                              |
+| `Ctrl+y`                                               | Insert the text last removed by a query kill action                                                      |
+| `Ctrl+l`                                               | Clear and redraw the screen                                                                              |
+| `Ctrl+/`                                               | Toggle wrapping of list entries                                                                          |
+| `Alt+/`                                                | Toggle wrapping of list entries; live grep and ordinary menus only (opens bookmarks in the main browser) |
+
+### Command palette details
 
 The command palette provides **Open with...**, system-default opening, archive
 creation and extraction, executable permissions, shell commands, command history,
 symbolic links, copying file contents, Git staging, checksums, trash restoration,
-and trash emptying. `Alt+h/j/k/l` are left available for system-level mappings.
+and trash emptying.
 
 **Create symbolic links** asks for a link path for each selected item, initially
 `<current-directory>/<name>.lnk`. Targets are absolute paths. Clear a prompt to
@@ -244,10 +409,6 @@ in the viewed directory, and output stays visible until a key is pressed.
 **Copy file contents** sends the exact bytes to `CLIPBOARD` (default `wl-copy`).
 Multiple files are concatenated in selection order without added separators.
 Every selected item must be a readable regular file (or a link to one).
-
-`F4` / `F5` adjust width in the side-by-side layout and height in the stacked
-layout. `F6` retains the chosen percentage when switching layouts. These keys
-apply to the main browser and refresh the preview at its new size.
 
 ## Browsing and File Operations
 

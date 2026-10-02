@@ -514,19 +514,19 @@ ipre_action_command_palette() {
     enter_alt_screen
 
     local -a options=(
-        "chmod    | [System]   Make executable (+x)"
-        "open     | [System]   Open with default GUI app"
-        "openwith | [System]   Open with..."
-        "shell    | [System]   Execute shell command (Block/Non-block)|Unsafe"
-        "history  | [System]   Run ipre command history on selected files"
-        "symlink  | [Files]    Create symbolic links"
-        "content  | [Clipboard] Copy file contents (concatenate selected files)"
-        "compress | [Archive]  Compress selected items"
-        "extract  | [Archive]  Extract archive here"
-        "gitadd   | [Git]      Add selected to staging"
-        "checksum | [Security] Calculate MD5/SHA256 hash"
-        "empty    | [Trash]    Empty hidden trash bin"
-        "restore  | [Trash]    Restore files from trash"
+        "content  | [Clip]    Copy file contents (concatenate selected files)"
+        "empty    | [Trash]   Empty hidden trash bin"
+        "restore  | [Trash]   Restore files from trash"
+        "chmod    | [System]  Make executable (+x)"
+        "open     | [System]  Open with default GUI app"
+        "openwith | [System]  Open with..."
+        "shell    | [System]  Execute shell command (Unsafe)"
+        "history  | [System]  Run ipre command history on selected files"
+        "symlink  | [System]  Create symbolic links"
+        "checksum | [System]  Calculate MD5/SHA256 hash"
+        "gitadd   | [VC-Git]  Add selected to staging"
+        "compress | [Archive] Compress selected items"
+        "extract  | [Archive] Extract archive here"
     )
 
     local choice
@@ -539,19 +539,19 @@ ipre_action_command_palette() {
     local cmd_id="${choice%% |*}"
     cmd_id="${cmd_id// /}"
     case "$cmd_id" in
-        chmod)    ipre_palette_do_chmod     "$@" ;;
-        open)     ipre_palette_do_open      "$@" ;;
-        openwith) ipre_palette_do_open_with "$@" ;;
-        shell)    ipre_palette_do_shell_cmd "$@" ;;
-        history)  ipre_palette_do_history_cmd "$@" ;;
-        symlink)  ipre_palette_do_symlink   "$@" ;;
+        chmod)    ipre_palette_do_chmod        "$@" ;;
+        open)     ipre_palette_do_open         "$@" ;;
+        openwith) ipre_palette_do_open_with    "$@" ;;
+        shell)    ipre_palette_do_shell_cmd    "$@" ;;
+        history)  ipre_palette_do_history_cmd  "$@" ;;
+        symlink)  ipre_palette_do_symlink      "$@" ;;
         content)  ipre_palette_do_copy_content "$@" ;;
-        compress) ipre_palette_do_compress  "$@" ;;
-        extract)  ipre_palette_do_extract   "$@" ;;
-        gitadd)   ipre_palette_do_git_add   "$@" ;;
-        checksum) ipre_palette_do_checksum  "$@" ;;
-        empty)    ipre_palette_do_trash_empty    ;;
-        restore)  ipre_palette_do_trash_restore  ;;
+        compress) ipre_palette_do_compress     "$@" ;;
+        extract)  ipre_palette_do_extract      "$@" ;;
+        gitadd)   ipre_palette_do_git_add      "$@" ;;
+        checksum) ipre_palette_do_checksum     "$@" ;;
+        empty)    ipre_palette_do_trash_empty       ;;
+        restore)  ipre_palette_do_trash_restore     ;;
         *)        print_warn "Unknown command ID: $cmd_id"; sleep 1 ;;
     esac
 }

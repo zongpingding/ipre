@@ -181,7 +181,7 @@ local -a fzf_binds=(
     "load:transform-header(\"$BACKEND_CMD\" ipre_action_header_info --encoded {1})+transform-border-label(\"$BACKEND_CMD\" ipre_action_border_status)+transform(\"$BACKEND_CMD\" ipre_action_focus_position)"
 
     #####     simple entry operation     #####
-    "\`:reload(\"$BACKEND_CMD\" ipre_action_switch)"
+    "alt-\`:reload(\"$BACKEND_CMD\" ipre_action_switch)"
     "alt-.:execute-silent(\"$BACKEND_CMD\" ipre_action_hidden)+reload(\"$BACKEND_CMD\" ipre_action_run)"
     "alt-o:execute-silent(\"$BACKEND_CMD\" ipre_action_sort_cycle)+reload(\"$BACKEND_CMD\" ipre_action_run)"
     "alt-e:track-current+transform(\"$BACKEND_CMD\" ipre_action_toggle_view)+reload-sync(\"$BACKEND_CMD\" ipre_action_run)"
