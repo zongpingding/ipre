@@ -1,0 +1,601 @@
+# ipre
+
+A terminal file browser built with **zsh, fzf, and fd**, with content previews
+provided by `pre`.
+
+- Browse directories with fuzzy search, navigation history, and detailed listings.
+- Preview text, images, documents, videos, fonts, and archive contents.
+- Copy, move, rename, delete, and restore files, including names with special characters.
+- Keep selections across directories and choose applications from a command palette.
+- Run multiple sessions with independent navigation and clipboard state.
+
+## Contents
+
+- [Requirements](#requirements)
+- [Setup](#setup)
+- [Usage](#usage)
+- [Keybindings](#keybindings)
+  - [Live grep / live picker](#live-grep--live-picker)
+  - [Buffer Manager](#buffer-manager)
+- [Browsing and file operations](#browsing-and-file-operations)
+- [Opening files](#opening-files)
+- [Configuration](#configuration)
+- [Storage and troubleshooting](#storage-and-troubleshooting)
+- [Project structure and tests](#project-structure-and-tests)
+- [Examples](#examples)
+
+## Requirements
+
+The scripts use zsh and Linux/GNU command-line tools. Core dependencies are
+`zsh`, `bash`, `fzf`, `fd`, `file`, GNU coreutils, and standard text tools such as
+`awk`, `sed`, and `grep`.
+
+Use fzf with support for `--id-nth`, `reload-sync`, and dynamic field transforms.
+The current interface has been tested with **fzf 0.74.4**. Install the additional
+tools below for the features you use.
+
+### Preview tools
+
+| Content                          | Tools                                           |
+|----------------------------------|-------------------------------------------------|
+| Text and source code             | `bat`; falls back to `head`                     |
+| Directories                      | `eza`                                           |
+| Images and generated thumbnails  | `chafa`                                         |
+| PDF                              | `pdftoppm`, `pdfinfo`                           |
+| DjVu                             | `ddjvu`, `djvused`                              |
+| PPM images and fonts             | ImageMagick (`magick`)                          |
+| Video thumbnails                 | `ffmpegthumbnailer`                             |
+| EPUB / MOBI thumbnails           | `gnome-epub-thumbnailer`                        |
+| ZIP contents                     | `fuse-zip`, `eza`, and working FUSE support     |
+| Other supported archive contents | `archivemount`, `eza`, and working FUSE support |
+
+Image previews currently use chafa's **Sixel** output, so the terminal must
+support Sixel. File icons also need a compatible font, such as a Nerd Font.
+
+### Optional integrations
+
+| Feature                             | Tools                                                                        |
+|-------------------------------------|------------------------------------------------------------------------------|
+| Copy paths to the system clipboard  | `wl-copy`, or the program configured by `CLIPBOARD`                          |
+| Live content search                 | ripgrep (`rg`)                                                               |
+| Edit live grep results              | Neovim or Vim, configured through `EDITOR` (default `nvim`)                   |
+| Directory jumps                     | `zoxide`                                                                     |
+| Global search and replace           | Neovim with `grug-far.nvim`, plus `rg` or `ast-grep` for the selected engine |
+| Archive creation and extraction     | `tar`, `zip`, `unzip`, and the relevant compression tools                    |
+| Git operations                      | `git`                                                                        |
+| Open files in external applications | See [Opening files](#opening-files)                                          |
+
+## Setup
+
+Keep these five files together in a directory on your `PATH`:
+
+```text
+ipre
+ipre_backend
+ipre_palette
+ipre_paths
+pre
+```
+
+For example, add the repository directory to `PATH` in your `.zshrc`:
+
+```zsh
+export PATH="/path/to/ipre:$PATH"
+```
+
+Ensure `ipre`, `ipre_backend`, and `pre` are executable.
+
+### Change the shell directory on exit
+
+An external program cannot change its parent shell's working directory. Add this
+optional wrapper to `.zshrc` to apply the directory written by `--cwd-file`:
+
+```zsh
+function ipre() {
+    local tmp cwd result
+    tmp=$(mktemp -t ipre-cwd.XXXXXX) || return
+    command ipre "$@" --cwd-file="$tmp"
+    result=$?
+    # Read through EOF, preserving spaces and trailing newlines in the path.
+    IFS= read -r -d '' cwd < "$tmp" || true
+    rm -f -- "$tmp"
+    if [[ -n "$cwd" && "$cwd" != "$PWD" ]]; then
+        builtin cd -- "$cwd" || return
+    fi
+    return "$result"
+}
+```
+
+With this wrapper, `Alt+q` exits into the currently viewed directory. In the
+default mode, accepting a single directory with `Enter` exits into that directory.
+With `--keep-open`, use `Right` to navigate and `Alt+q` to exit into the current
+directory; `Enter` on a directory leaves the browser open.
+
+## Usage
+
+### Browse files
+
+```zsh
+ipre                           # Browse the current directory
+ipre /path/to/directory        # Browse one directory
+ipre /path/one /path/two       # Search several directories together
+ipre --depth 3                 # Include entries up to three levels deep
+ipre --depth 0                 # Stream results without a depth limit
+ipre -e c /path/to/project     # Pass an extension filter to fd
+ipre --keep-open               # Keep the browser open after opening files
+```
+
+| Option                  | Meaning                                                        |
+|-------------------------|----------------------------------------------------------------|
+| `--depth N`             | Search depth; defaults to `1`. `0` means unlimited.            |
+| `-d N`, `--max-depth N` | Aliases for `--depth N`.                                       |
+| `--keep-open`           | Open files without closing the main browser.                   |
+| `--stay`, `--no-leave`  | Aliases for `--keep-open`.                                     |
+| `--cwd-file=PATH`       | Write the chosen exit directory to a file for a shell wrapper. |
+
+`--depth=N` and `--max-depth=N` are also accepted. Additional options are passed
+to fd. Hidden files are shown initially; `Alt+.` toggles them. The default fd
+command ignores `.gitignore` rules and follows symbolic links.
+
+### Preview a file directly
+
+```zsh
+pre report.pdf                # Preview the first page
+pre report.pdf 4              # Preview page 4
+pre book.djvu 4
+pre image.png
+pre video.mp4
+pre font.ttf
+pre book.epub
+pre get_file_type report.pdf  # Print the detected type without rendering
+```
+
+## Keybindings
+
+Keys are grouped by **where you use them**. The main browser and live grep picker
+have separate bindings; for example, `Alt+d` trashes files in the browser but
+clears result selections in live grep. `Alt` means hold Alt while pressing the
+named key; `` Alt+` `` means Alt + backtick, and `Alt++` means Alt + the `+` character.
+These tables describe the shipped bindings and fzf defaults; your
+`FZF_DEFAULT_OPTS` / `FZF_DEFAULT_OPTS_FILE` may customize inherited defaults.
+
+- **Main browser:** [Navigation](#main-browser-navigation),
+  [listing and filters](#main-browser-listing-and-filters),
+  [preview](#main-browser-preview), [selection](#main-browser-selection-and-buffers),
+  [file operations](#main-browser-file-operations), [search and commands](#main-browser-search-and-commands).
+- **Other interfaces:** [Live grep / live picker](#live-grep--live-picker),
+  [Buffer Manager](#buffer-manager), [menus and prompts](#other-menus-and-prompts).
+- **Shared controls:** [Query editing](#query-editing-fzf-defaults).
+
+### Main browser: navigation
+
+| Key                              | Action                                                                           |
+|----------------------------------|----------------------------------------------------------------------------------|
+| `Up` / `Down`                    | Move to the previous / next item                                                 |
+| `Ctrl+k` / `Ctrl+p` / `Alt+Up`   | Move to the previous item                                                        |
+| `Ctrl+j` / `Ctrl+n` / `Alt+Down` | Move to the next item                                                            |
+| `PageUp` / `PageDown`            | Move through the list one screen at a time                                       |
+| `Left` / `Right`                 | Visit the parent / focused directory; Right on a file visits its parent          |
+| `F2` / `F3`                      | Go back / forward in directory history                                           |
+| `Enter`                          | Accept marked items, or the focused item if none are marked; open files and exit |
+| `Enter` with `--keep-open`       | Open files and keep browsing; directories leave the browser open                 |
+| `Ctrl+q` / `Ctrl+c` / `Ctrl+g`   | Exit without requesting a shell directory change                                 |
+| `Alt+q`                          | Exit and request a shell directory change to the viewed directory                |
+| `Esc`                            | Ignored in the main browser                                                      |
+| `Alt+?`                          | Show built-in help; press any key to return                                      |
+
+Accepting a single directory with `Enter` requests a shell directory change;
+`Alt+q` requests the viewed directory instead. Both require the
+[shell wrapper](#change-the-shell-directory-on-exit). With `--keep-open`,
+use `Right` to enter a directory.
+
+### Main browser: listing and filters
+
+Typing in the main query filters **filenames**. Use `Alt+g` for file contents.
+
+| Key                          | Action                                                                          |
+|------------------------------|---------------------------------------------------------------------------------|
+| `Alt+e`                      | Toggle compact / detailed listing                                               |
+| `` Alt+` `` (Alt + backtick) | Cycle all → files → directories → all                                           |
+| `Alt+.`                      | Toggle hidden files; initially shown                                            |
+| `Alt+1` … `Alt+9`            | Set search depth to 1 … 9                                                       |
+| `Alt+0`                      | Set unlimited search depth                                                      |
+| `Alt+-` / `Alt+=`            | Decrease / increase depth by 1; depth never goes below 0, and 0 means unlimited |
+| `Alt+o`                      | Cycle sorting by name → modification time → size → extension → name             |
+
+### Main browser: preview
+
+| Key                       | Action                                                                                           |
+|---------------------------|--------------------------------------------------------------------------------------------------|
+| `Alt+p`                   | Show / hide the preview pane                                                                     |
+| `F4` / `F5`               | Shrink / grow the preview by 10 percentage points, within 20%–80%                                |
+| `F6`                      | Switch between side-by-side and stacked preview layouts                                          |
+| `Alt+f` / `Alt+b`         | Next / previous PDF or DjVu page; for other content, scroll the preview down / up by half a page |
+| `Shift+Down` / `Shift+Up` | Scroll the preview down / up by one line (fzf default)                                           |
+
+`F4` / `F5` adjust width in the side-by-side layout and height in the stacked
+layout. `F6` retains the chosen percentage. These geometry keys apply to the
+main browser and refresh the preview at its new size.
+
+### Main browser: selection and buffers
+
+**Marked items** are the current fzf multi-selection. **SEL** is the saved
+cross-directory selection (`Alt+s`); **CLIP** is ipre's file copy/cut buffer
+(`Alt+c` / `Alt+x`), separate from the system clipboard. File actions generally
+use marked items, or the focused item when none are marked. `Alt+r` and the
+command palette additionally merge SEL, removing duplicate paths.
+
+| Key                 | Action                                                                            |
+|---------------------|-----------------------------------------------------------------------------------|
+| `Tab` / `Shift+Tab` | Toggle the focused item's mark and move down / up                                 |
+| `Alt+a`             | Toggle selection of all currently matching items                                  |
+| `Alt+s`             | Add marked items (or the focused item) to SEL, then clear current marks           |
+| `Alt+i`             | Open [Buffer Manager](#buffer-manager) to inspect or edit SEL and CLIP            |
+| `Alt++`             | Diff exactly two files saved in SEL using `EDITOR -d`; clears SEL after returning |
+
+### Main browser: file operations
+
+| Key               | Action                                                                    |
+|-------------------|---------------------------------------------------------------------------|
+| `Alt+c` / `Alt+x` | Copy / cut selected paths into CLIP, then clear current marks             |
+| `Alt+v`           | Paste CLIP into the viewed directory                                      |
+| `Alt+y`           | Copy absolute paths to the **system clipboard**, then clear current marks |
+| `Alt+r`           | Rename current items + SEL interactively, deduplicating paths             |
+| `Alt+w`           | Batch rename current items in the name editor                             |
+| `Alt+n`           | Create files or directories; names ending in `/` create directories       |
+| `Alt+d`           | Move current items to the trash                                           |
+| `Alt+m`           | Bookmark current items                                                    |
+| `Alt+/`           | Open the bookmarks picker                                                 |
+
+### Main browser: search and commands
+
+| Key         | Action                                                                                       |
+|-------------|----------------------------------------------------------------------------------------------|
+| `Alt+g`     | Open [live grep / live picker](#live-grep--live-picker) to search file contents with ripgrep |
+| `Alt+t`     | Jump to a directory using the zoxide picker                                                  |
+| `Alt+;`     | Open grug-far with the ripgrep engine                                                        |
+| `Alt+'`     | Open grug-far with the ast-grep engine                                                       |
+| `Alt+Space` | Open the [command palette](#command-palette-details)                                         |
+
+ipre does not bind `Alt+h` / `Alt+j` / `Alt+k` / `Alt+l`, leaving them available
+for system-level mappings.
+
+### Live grep / live picker
+
+Open with `Alt+g` from the main browser. The initial **Ripgrep >** mode searches
+file contents under the viewed directory as you type. **Fuzzy >** filters the
+loaded result list without running a new content search. Query editing follows
+[the shared fzf defaults](#query-editing-fzf-defaults), with the overrides below.
+
+| Group       | Key                                    | Action inside live grep                                                                             |
+|-------------|----------------------------------------|-----------------------------------------------------------------------------------------------------|
+| Search mode | `Alt+f`                                | Switch to fuzzy filtering of loaded results; clears the query input                                 |
+| Search mode | `Alt+r`                                | Return to ripgrep search; clears the query input and reloads results                                |
+| Navigation  | `Up` / `Down`                          | Move to the previous / next result                                                                  |
+| Navigation  | `Ctrl+k` / `Ctrl+p` / `Alt+Up`         | Move to the previous result                                                                         |
+| Navigation  | `Ctrl+j` / `Ctrl+n` / `Alt+Down`       | Move to the next result                                                                             |
+| Navigation  | `PageUp` / `PageDown`                  | Move through results one screen at a time                                                           |
+| Selection   | `Tab` / `Shift+Tab`                    | Toggle the focused result's mark and move down / up                                                 |
+| Selection   | `Alt+a`                                | Toggle selection of all currently matching results                                                  |
+| Selection   | `Alt+d`                                | Deselect all currently matching results                                                             |
+| Preview     | `Ctrl+f` / `Ctrl+b`                    | Scroll the preview down / up by half a page                                                         |
+| Preview     | `Shift+Down` / `Shift+Up`              | Scroll the preview down / up by one line (fzf default)                                              |
+| Edit        | `Alt+e`                                | Edit marked results (otherwise all matches) in Quickfix; closing the editor returns here            |
+| Copy        | `Alt+y`                                | Copy marked locations (otherwise all matches) as `relative/path:line:column:`; keep the picker open |
+| Accept      | `Enter`                                | Accept marked results, or the focused result if none are marked, and return to the main browser     |
+| Cancel      | `Esc` / `Ctrl+q` / `Ctrl+c` / `Ctrl+g` | Close live grep and return to the main browser                                                      |
+
+`Enter` visits the first accepted file's parent and focuses that file. If the
+accepted results span multiple distinct files, those files are also added to SEL.
+It does not open the editor; use `Alt+e` to edit matching locations.
+
+**Export scope (`Alt+e` / `Alt+y`):** marked results take priority; otherwise,
+all currently matching results are used, including those offscreen. Exports
+respect fuzzy filtering and retain separate matches within the same file.
+Copying uses `CLIPBOARD` (default `wl-copy`). Paths outside the viewed directory
+remain absolute; backslashes and control characters use the usual ipre escapes.
+Quickfix receives exact paths separately from display text. Status and errors
+appear in the picker header.
+
+Editing returns to the same query, marks, and filtered list. The result list
+is a snapshot: after editing files, use `Alt+r` and enter a query to search again.
+
+#### Quickfix editor commands
+
+Quickfix supports `EDITOR=nvim`, `vim`, or `vi` backed by Vim, including quoted
+executable paths and options. It opens the first matching location and the
+result list. These are **editor commands**, entered after leaving Insert mode
+with `Esc`:
+
+| Command             | Action in Vim / Neovim                                       |
+|---------------------|--------------------------------------------------------------|
+| `:w`                | Save the current file                                        |
+| `:cnext` / `:cprev` | Go to the next / previous matching location                  |
+| `:cnfile`           | Go to the first matching location in the next file           |
+| `:qa`               | Close the editor and return to live grep; save changes first |
+
+### Buffer Manager
+
+Open with `Alt+i` from the main browser. These are **single-character keys**,
+without Alt; letter keys also accept uppercase. SEL and CLIP refer to the
+buffers described [above](#main-browser-selection-and-buffers).
+
+| Key                          | Action inside Buffer Manager                                                                                 |
+|------------------------------|--------------------------------------------------------------------------------------------------------------|
+| `p`                          | Print both buffers' paths; press any key to return to the manager                                            |
+| `t`                          | Toggle CLIP's operation between COPY and CUT                                                                 |
+| `>` / `<`                    | Merge SEL into CLIP / CLIP into SEL, then clear the source buffer                                            |
+| `,` / `.`                    | Merge SEL into CLIP / CLIP into SEL, keeping the source buffer                                               |
+| `1`                          | Clear both buffers                                                                                           |
+| `2` / `3`                    | Clear CLIP / SEL                                                                                             |
+| `s`                          | Pick a saved SEL item and jump to its directory in the main browser; focus it if it is a file                |
+| `v`; `:v` / `/vim` + `Enter` | Edit both buffers with `EDITOR`; closing the editor applies the buffer edits and returns to the main browser |
+| `q` / `Enter`                | Close the manager and return to the main browser                                                             |
+
+### Other menus and prompts
+
+Bookmarks, zoxide, the command palette, **Open with...**, command history, and
+trash restoration use separate fzf menus. Type to filter, use `Up` / `Down`
+to move, `Enter` to accept, and `Esc` / `Ctrl+q` / `Ctrl+c` / `Ctrl+g` to cancel
+that menu. Trash restoration also supports multi-selection with `Tab` /
+`Shift+Tab`. The main browser's custom Alt bindings do not apply to these menus.
+
+| Context                                        | Key / input              | Action                                                                                                     |
+|------------------------------------------------|--------------------------|------------------------------------------------------------------------------------------------------------|
+| Create / rename prompt                         | `Enter`                  | Submit the typed name(s)                                                                                   |
+| Create / rename prompt                         | Empty input + `Enter`    | Cancel creation / skip the current rename item; clear input first (`Ctrl+u` in Emacs-style prompt editing) |
+| Create / rename prompt                         | `:q` or `/q` + `Enter`   | Cancel creation / abort the remaining rename batch                                                         |
+| Create prompt                                  | `:v` or `/vim` + `Enter` | Open the batch creation editor                                                                             |
+| Batch creation editor                          | `:wq` / `:q!`            | Save and apply / quit without saving; delete all item rows to cancel                                       |
+| Execute shell command: mode choice             | `b` / `n`                | Run in the foreground and wait / dispatch in the background (uppercase also accepted)                      |
+| Help or command output showing “Press any key” | Any key                  | Return to the previous interface                                                                           |
+
+Text prompts use zsh's `vared` editor and its active keymap; they do not use the
+browser's Alt bindings. Batch rename and external editors use their own editor
+keymaps. See [Rename](#rename) for batch rename's save and validation rules.
+
+### Query editing (fzf defaults)
+
+These edit the query in the main browser, live grep, and other fzf menus unless
+a context-specific binding overrides them. In the main browser, `Left` /
+`Right` navigate directories and `Alt+b` / `Alt+f` control the preview. In live
+grep, `Ctrl+b` / `Ctrl+f` control the preview, `Alt+f` changes search mode, and
+`Alt+d` clears result selections.
+
+| Key                                                    | Action / scope                                                                                           |
+|--------------------------------------------------------|----------------------------------------------------------------------------------------------------------|
+| `Ctrl+a` / `Home`                                      | Move to the beginning of the query                                                                       |
+| `Ctrl+e` / `End`                                       | Move to the end of the query                                                                             |
+| `Ctrl+b` / `Ctrl+f`                                    | Move the query cursor left / right; main browser and ordinary menus only                                 |
+| `Left` / `Right`                                       | Move the query cursor left / right; live grep and ordinary menus only                                    |
+| `Shift+Left` / `Alt+Left`; `Shift+Right` / `Alt+Right` | Move the query cursor one word left / right                                                              |
+| `Alt+b`                                                | Move the query cursor one word left; live grep and ordinary menus only                                   |
+| `Alt+f`                                                | Move the query cursor one word right; ordinary menus only                                                |
+| `Backspace` / `Ctrl+h` / `Ctrl+Backspace`              | Delete the character before the query cursor                                                             |
+| `Delete`                                               | Delete the character at the query cursor                                                                 |
+| `Ctrl+d`                                               | Delete at the query cursor; when the query is empty, exit the browser / cancel the current picker        |
+| `Ctrl+u`                                               | Delete the query text before the cursor                                                                  |
+| `Ctrl+w` / `Alt+Backspace`                             | Delete the word before the query cursor                                                                  |
+| `Alt+d`                                                | Delete the word after the query cursor; ordinary menus only                                              |
+| `Ctrl+y`                                               | Insert the text last removed by a query kill action                                                      |
+| `Ctrl+l`                                               | Clear and redraw the screen                                                                              |
+| `Ctrl+/`                                               | Toggle wrapping of list entries                                                                          |
+| `Alt+/`                                                | Toggle wrapping of list entries; live grep and ordinary menus only (opens bookmarks in the main browser) |
+
+### Command palette details
+
+The command palette provides **Open with...**, system-default opening, archive
+creation and extraction, executable permissions, shell commands, command history,
+symbolic links, copying file contents, Git staging, checksums, trash restoration,
+and trash emptying.
+
+**Create symbolic links** asks for a link path for each selected item, initially
+`<current-directory>/<name>.lnk`. Targets are absolute paths. Clear a prompt to
+skip an item; existing files, directories, and links are never replaced. Path
+escapes follow the rename prompt (`\n`, `\t`, and `\\`).
+
+**Run ipre command history on selected files** lists commands previously executed
+through ipre's **Execute shell command** palette entry, newest first, with
+duplicates hidden. It does not read the shell's history. Commands are saved across
+sessions, starting with executions made after this feature was installed.
+After choosing a command, edit its arguments and choose **All selected files in
+one invocation** or **One invocation per selected file**. The editable command
+initially appends `"$@"` unless it already contains that expression. Remove old
+file arguments and move `"$@"` to the appropriate position for pipelines or more
+complex commands. Selected paths are passed as positional arguments to zsh;
+keep `"$@"` quoted to preserve spaces and special characters. Execution happens
+in the viewed directory, and output stays visible until a key is pressed.
+
+**Copy file contents** sends the exact bytes to `CLIPBOARD` (default `wl-copy`).
+Multiple files are concatenated in selection order without added separators.
+Every selected item must be a readable regular file (or a link to one).
+
+## Browsing and File Operations
+
+### History and detailed listings
+
+`F2` / `F3` traverse directories visited in this session, including bookmark,
+live grep, and zoxide jumps. A new visit after going back clears forward history.
+Missing or inaccessible directories are skipped. History navigation clears the
+query, file/directory filter, and explicit search roots; it retains depth, sorting,
+clipboard contents, and the saved selection.
+
+`Alt+e` displays attributes before filenames, similar to `ls -l`:
+
+```text
+type  permissions  size  modification time  name [-> symlink target]
+```
+
+Attribute columns have fixed widths. Permissions are octal, sizes are in bytes,
+and directory sizes appear as `-` without calculating recursive disk usage.
+Detailed mode disables automatic horizontal scrolling to keep columns aligned.
+Full names remain searchable beyond the visible width; metadata and link targets
+are excluded from filename search. Switching views preserves focus and multi-selection.
+
+Depth `0` streams results without global sorting or icons. Other depths apply the
+selected sort order and place directories first.
+
+### Copy, cut, and paste
+
+Paste focuses the first successful destination. Successful moves are removed
+from the cut buffer; failed items remain available for retry. Copy retains its
+buffer. Failures appear as `Paste: N failed` in the header.
+
+Copying or moving a directory into itself or a descendant is rejected, including
+through directory symlinks. A failed copy may leave partial destination content;
+that destination is not treated as a successful focus target.
+
+### Rename
+
+`Alt+r` merges the current fzf selection with the saved selection buffer and
+renames each distinct path once. Successful renames update the corresponding
+saved paths; skipped, failed, and unprocessed entries stay in the buffer.
+Items selected only in fzf are not added to the buffer. The copy/cut buffer is
+unchanged.
+
+Edited names are relative to each selected item's parent directory. Renaming
+`/a/b/c.txt` to `new.txt` produces `/a/b/new.txt`; entering `../new.txt` moves it
+to `/a/new.txt`.
+
+Batch rename rows contain a fixed `[id]`, a TAB, and an editable name. Keep the
+IDs intact; rows may be reordered. An empty name skips that row, and deleting
+all rows cancels the batch. LF and CRLF editor files are supported; use `\r`
+for a literal carriage return in a name. The entire edit is validated before
+any file moves; a missing, duplicate, or invalid row, a changed source, or a
+destination conflict cancels the batch. Rename a directory and its selected
+children in separate batches.
+Batch moves use temporary paths on each source filesystem. Cross-filesystem
+moves are rejected so a failed rename cannot leave a partial copy. On an
+interruption or move failure, ipre attempts to restore the original paths. If
+outside changes prevent rollback, it keeps the payload in its temporary
+`.ipre-rename.*` directory, or at an already committed destination, and leaves
+a `recovery.txt` map in the staging directory. Parent directories are checked
+before and after moves to detect replacement by another process. This is not
+an atomic filesystem transaction: concurrent external changes can prevent
+rollback, and SIGKILL or a system crash cannot run the recovery code.
+
+Names containing arrows, percent signs, TAB, newlines, and non-UTF-8 bytes are
+kept separate from their display labels. Name editors use `\n` for newline,
+`\t` for TAB, and `\\` for a literal backslash. See the
+[path protocol](./PATH_PROTOCOL.md) for details.
+
+### Trash and restore
+
+Deleted items are stored separately, so matching names do not overwrite one
+another. **Restore files from trash** in the command palette returns items to
+their original directories and recreates missing parents. Existing destinations
+are preserved by adding `_restoredN` to restored names. The restore menu shows
+the original paths.
+
+## Opening Files
+
+Default Enter, `--keep-open`, and the palette share the backend opener. Each
+file is classified through `pre get_file_type`, allowing mixed selections to
+use different applications. Detection checks known extensions first and uses
+MIME for absent or unrecognized extensions; it does not verify every known
+extension against file contents.
+
+| File type                | Environment variable   | Default                      |
+|--------------------------|------------------------|------------------------------|
+| Text                     | `EDITOR`               | `nvim`                       |
+| Image / PPM              | `IPRE_IMAGE_OPENER`    | `imv`                        |
+| PDF / DjVu / EPUB / MOBI | `IPRE_DOCUMENT_OPENER` | `zathura`                    |
+| Audio / video            | `IPRE_MEDIA_OPENER`    | `mpv`                        |
+| Other                    | `IPRE_SYSTEM_OPENER`   | `xdg-open` (`open` on macOS) |
+
+Text files open together in a foreground editor. Images and media are grouped
+in background applications; document and system handlers receive one file per
+process. Missing programs and failed foreground commands report an `Open:` error.
+Failures after a background application starts cannot be reported here.
+
+Use `Alt+Space` → **Open with...** to choose a handler explicitly or enter a custom
+program with foreground/background execution. Opener specifications accept quoted
+program names and arguments, such as `nvim -p` or
+`"/path with spaces/viewer" --fullscreen`. Paths are appended as separate arguments;
+these specifications do not evaluate pipes, variables, or command substitutions.
+
+## Configuration
+
+Configure the opener variables above and these settings in your shell:
+
+| Variable          | Purpose                                                       |
+|-------------------|---------------------------------------------------------------|
+| `IPRE_FD`         | Base fd command and arguments; defaults to `fd --follow -I .` |
+| `CLIPBOARD`       | System clipboard command for paths and file contents; defaults to `wl-copy` |
+| `EZA_ARG`         | Arguments for directory and archive previews                  |
+| `FONT_TEXT`       | Sample text for font previews                                 |
+| `XDG_CACHE_HOME`  | Base cache directory; defaults to `~/.cache`                  |
+| `XDG_DATA_HOME`   | Base persistent-data directory; defaults to `~/.local/share`  |
+| `XDG_RUNTIME_DIR` | Base session-state directory; falls back to `/dev/shm`        |
+
+```zsh
+export IPRE_FD='fd --follow -I . -E .git'
+export EDITOR=nvim
+export IPRE_IMAGE_OPENER=imv
+export IPRE_MEDIA_OPENER=mpv
+export CLIPBOARD=wl-copy
+export EZA_ARG='-lb --icons=always --color=always'
+```
+
+## Storage and Troubleshooting
+
+| Data                                                               | Location                                                       | Lifetime                                           |
+|--------------------------------------------------------------------|----------------------------------------------------------------|----------------------------------------------------|
+| Navigation, history, filters, buffers, focus, view, and page state | `${XDG_RUNTIME_DIR:-/dev/shm}/ipre_<PID>`                      | Independent per invocation; removed on normal exit |
+| Commands executed through the ipre palette | `${XDG_DATA_HOME:-$HOME/.local/share}/ipre/commands.history-v1` | Shared across sessions |
+| Bookmarks                                                          | `${XDG_DATA_HOME:-$HOME/.local/share}/ipre/bookmarks.paths-v1` | Shared across sessions                             |
+| Trash                                                              | `${XDG_DATA_HOME:-$HOME/.local/share}/ipre/.trash`             | Shared across sessions                             |
+| Preview cache                                                      | `${XDG_CACHE_HOME:-$HOME/.cache}/pre_thumbs`                   | Reused across sessions                             |
+
+Legacy bookmarks are migrated to `bookmarks.paths-v1` on first use. Preview cache
+keys include the absolute source path, file identity, nanosecond timestamps, and
+rendering options. Standalone `pre` also accepts an `IPRE_CACHE_DIR` override;
+`ipre` sets this directory from `XDG_CACHE_HOME`.
+
+- **Blank image or document previews:** check Sixel support and the relevant
+  renderer first. If cached thumbnails are damaged, unmount any archive mounted
+  under the cache's `mnt` directory before clearing the cache.
+- **Alt keys insert accented characters:** configure the terminal to send
+  Alt/Option as Meta (an Escape prefix).
+- **No shell directory change:** install the wrapper from [Setup](#setup).
+- **Detailed columns consume too much space:** hide the preview with `Alt+p`
+  or enlarge the terminal.
+
+## Project Structure and Tests
+
+| Script         | Role                                                               |
+|----------------|--------------------------------------------------------------------|
+| `ipre`         | Startup, session initialization, fzf bindings, and exit handling   |
+| `ipre_backend` | Listing, navigation, file operations, preview control, and opening |
+| `ipre_palette` | Command menus and their handlers, loaded by the backend            |
+| `ipre_paths`   | Shared path encoding, record generation, and state helpers         |
+| `pre`          | Standalone preview rendering and file type detection               |
+
+See [Architecture](./ARCHITECTURE.md) for the execution flow and Mermaid diagram,
+and [Path protocol](./PATH_PROTOCOL.md) for record and state formats.
+
+```sh
+python3 tests/run.py                     # Syntax checks and all regression suites
+python3 tests/run.py -k cache            # Tests matching a name
+python3 tests/run.py -p test_details.py  # One suite
+```
+
+Tests cover real fzf interaction, concurrent sessions, special filenames, file
+operation failures, preview caching, and openers. Requirements, isolation, and
+coverage are documented in [tests/README.md](./tests/README.md).
+
+## Examples
+
+These recordings may show older keybindings or interface details.
+
+### Basic browsing
+
+![Basic ipre browsing](./examples/ipre_example_basic.gif)
+
+### Advanced workflow
+
+![Advanced ipre workflow](./examples/ipre_example_advanced.gif)
+
+## License
+
+See [LICENSE](./LICENSE) for the GNU General Public License, version 3.

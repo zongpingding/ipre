@@ -1,0 +1,557 @@
+#!/usr/bin/env zsh
+
+# =========================================================
+# Command Palette Handlers
+# =========================================================
+
+ipre_palette_do_open() {
+    ipre_open_selected system "$@"
+}
+
+ipre_palette_do_open_with() {
+    [[ $# -eq 0 || -z "$1" ]] && return 0
+    setopt localoptions localtraps
+    trap 'return 130' INT
+    enter_alt_screen
+    {
+        local choice mode specification execution
+        local -a choices=(
+            $'auto\tAutomatic (detect each file type)'
+            $'editor\tText editor'
+            $'system\tSystem default application'
+            $'image\tImage viewer'
+            $'document\tDocument viewer'
+            $'media\tMedia player'
+            $'custom\tOther program...'
+        )
+        choice=$(printf '%s\n' "${choices[@]}" | fzf --height=99% --min-height=1 --reverse \
+            --prompt 'Open with > ' --delimiter=$'\t' --with-nth=2) || return 0
+        [[ -n "$choice" ]] || return 0
+        mode="${choice%%$'\t'*}"
+        if [[ "$mode" == custom ]]; then
+            printf '%s\n' 'Enter a program and its options. Selected paths will be appended as arguments.'
+            vared -p 'Program: ' specification </dev/tty || return 0
+            [[ -n "$specification" ]] || return 0
+            execution=$(printf '%s\n' foreground background | fzf --height=99% --min-height=1 \
+                --reverse --prompt 'Run mode > ') || return 0
+            [[ "$execution" == foreground || "$execution" == background ]] || return 0
+            : > "$IPRE_NOTICE_FILE"
+            ipre_open_command "$execution" "$specification" "$@"
+        else
+            ipre_open_selected "$mode" "$@"
+        fi
+    } always {
+        leave_alt_screen
+    }
+}
+
+
+# In ipre-palette:
+ipre_palette_do_checksum() {
+    [[ $# -eq 0 ]] && return
+    clear
+    enter_alt_screen
+    print_title "Checksum Generator"
+    local i
+    for i in "$@"; do
+        [[ ! -f "$i" ]] && continue
+        printf "%bFile: %s%b\n" "$C_CYN" "$i" "$C_RST"
+        if command -v sha256sum &> /dev/null; then
+            sha256sum "$i"
+            md5sum "$i"
+        else
+            shasum -a 256 "$i"
+        fi
+        echo ""
+    done
+    printf "Press any key to return..."
+    read -k 1 -s _ < /dev/tty
+    leave_alt_screen
+}
+
+ipre_palette_do_compress() {
+    [[ $# -eq 0 ]] && return
+    enter_alt_screen
+    local default_name="archive.tar.gz"
+    if [[ $# -eq 1 ]]; then
+        local base_name="${1:t}"
+        default_name="${base_name}.tar.gz"
+    fi
+    local archive_name="$default_name"
+    if ! vared -p "Enter archive name (e.g., backup.zip or source.tar.gz): " archive_name </dev/tty; then
+        echo ""
+        print_warn "Compression aborted by user."
+        sleep 1
+        leave_alt_screen
+        return
+    fi
+    if [[ -z "$archive_name" ]]; then
+        leave_alt_screen
+        return
+    fi
+    case "${archive_name:l:e}" in
+        zip)      zip -r    "$archive_name" "$@" ;;
+        gz|tgz)   tar -czvf "$archive_name" "$@" ;;
+        bz2|tbz2) tar -cjvf "$archive_name" "$@" ;;
+        xz|txz)   tar -cJvf "$archive_name" "$@" ;;
+        *) 
+            print_warn "Unsupported extension, defaulting to tar.gz"
+            tar -czvf "${archive_name}.tar.gz" "$@" 
+            ;;
+    esac
+    printf "\n%bPress any key to return...%b" "$C_CYN" "$C_RST"
+    read -k 1 -s _ < /dev/tty
+    leave_alt_screen
+}
+
+ipre_palette_do_extract() {
+    enter_alt_screen
+    print_title "Archive Extractor"
+    local i
+    for i in "$@"; do
+        [[ ! -f "$i" ]] && continue
+        local base_name="${i:t}"
+        local default_dir="${${base_name:r}%.tar}"
+        local target_dir="$default_dir"
+        printf "%bArchive: %s%b\n" "$C_CYN" "$base_name" "$C_RST"
+        # NOTE: Use Zsh's native vared (Variable Editor) to allow interactive editing.
+        #       It natively supports arrow keys and vim/Emac key binds.
+        if ! vared -p "Extract to: " target_dir </dev/tty; then
+            echo ""
+            printf "%bSkipping %s (Aborted by user)%b\n\n" "$C_YLW" "$base_name" "$C_RST"
+            continue
+        fi
+
+        # Guard: If the user deletes everything and leaves it empty
+        if [[ -z "$target_dir" ]]; then
+            printf "%bSkipping %s (Empty target directory)%b\n\n" "$C_YLW" "$base_name" "$C_RST"
+            continue
+        fi
+        if [[ -e "$target_dir" ]]; then
+            if [[ ! -d "$target_dir" ]]; then
+                printf "%bSkipping %s ('%s' exists but is a file)%b\n\n" "$C_RED" "$base_name" "$target_dir" "$C_RST"
+                continue
+            fi
+            # Zsh native check: fetch contents including hidden files (N=nullglob, D=dotglob)
+            local contents=("$target_dir"/*(ND))
+            if (( ${#contents[@]} > 0 )); then
+                printf "%bSkipping %s (Directory '%s' exists and is not empty)%b\n\n" "$C_YLW" "$base_name" "$target_dir" "$C_RST"
+                continue
+            fi
+            # If the directory exists but is perfectly empty. Proceed.
+        else
+            mkdir -p "$target_dir"
+        fi
+        printf "%bExtracting into %s/...%b\n" "$C_CYN" "$target_dir" "$C_RST"
+        case "${i:l:e}" in
+            zip)        unzip     "$i" -d "$target_dir" ;;
+            tar)        tar -xvf  "$i" -C "$target_dir" ;;
+            gz|tgz)     tar -xzvf "$i" -C "$target_dir" ;;
+            bz2|tbz2)   tar -xjvf "$i" -C "$target_dir" ;;
+            xz|txz)     tar -xJvf "$i" -C "$target_dir" ;;
+            *) 
+                printf "%bCannot extract %s. Unsupported format.%b\n" "$C_RED" "$i" "$C_RST"
+                rmdir "$target_dir" 2>/dev/null
+                ;;
+        esac
+        echo "─────────────────────────────────────────"
+    done
+    printf "%bAll extraction tasks completed.%b\n" "$C_GRN" "$C_RST"
+    printf "Press any key to return..."
+    read -k 1 -s _ < /dev/tty
+    leave_alt_screen
+}
+
+ipre_palette_do_chmod() {
+    chmod +x "$@"
+}
+
+ipre_palette_do_symlink() {
+    [[ $# -gt 0 && -n "$1" ]] || return 0
+    cd -- "$IPRE_CWD" || return 1
+    setopt localoptions localtraps
+    trap 'return 130' INT
+    enter_alt_screen
+    {
+        print_title "Create Symbolic Links"
+        printf '%s\n' 'Enter each link path; clear input to skip. Existing paths are never replaced.'
+        printf '%s\n' 'Path escapes: \n for newline, \t for TAB, \\ for backslash.'
+        local item link_name destination first_link="" failed=0
+        for item in "$@"; do
+            item="${item:a}"
+            [[ -e "$item" || -L "$item" ]] || continue
+            printf 'Target: %s\n' "$(print_label "$item")"
+            ipre_text_escape "$IPRE_CWD/${item:t}.lnk"
+            link_name="$REPLY"
+            vared -p 'Link path: ' link_name </dev/tty || break
+            [[ -n "$link_name" ]] || continue
+            if ! ipre_text_unescape "$link_name"; then
+                print_warn "Invalid path escape."
+                failed=1
+                continue
+            fi
+            destination="${REPLY:a}"
+            if ! mkdir -p -- "${destination:h}" || ! ln -sT -- "$item" "$destination"; then
+                failed=1
+                continue
+            fi
+            [[ -n "$first_link" ]] || first_link="$destination"
+        done
+        [[ -n "$first_link" ]] && ipre_set_focus "$first_link"
+        printf 'Press any key to return...'
+        read -k 1 -s _ </dev/tty
+        (( failed == 0 ))
+    } always {
+        leave_alt_screen
+    }
+}
+
+ipre_palette_do_copy_content() {
+    [[ $# -gt 0 && -n "$1" ]] || return 0
+    cd -- "$IPRE_CWD" || return 1
+    local item failed=0
+    local -a clipboard_cmd=("${(@Q)${(z)${CLIPBOARD:-wl-copy}}}")
+    # Validate every input before touching the clipboard, including directories.
+    for item in "$@"; do
+        if [[ ! -f "$item" || ! -r "$item" ]]; then
+            ipre_text_escape "$item"
+            printf 'Clipboard: not a readable file: %s\n' "$REPLY" > "$IPRE_NOTICE_FILE"
+            return 1
+        fi
+    done
+    if ! command -v -- "${clipboard_cmd[1]}" >/dev/null 2>&1; then
+        printf 'Clipboard: program unavailable\n' > "$IPRE_NOTICE_FILE"
+        return 1
+    fi
+    # Stream bytes directly: no command substitution, separators or newline loss.
+    setopt localoptions pipefail
+    cat -- "$@" | "${clipboard_cmd[@]}" || failed=1
+    if (( failed )); then
+        printf 'Clipboard: failed to copy file contents\n' > "$IPRE_NOTICE_FILE"
+    else
+        printf 'Clipboard: copied contents of %d file(s)\n' "$#" > "$IPRE_NOTICE_FILE"
+    fi
+    return "$failed"
+}
+
+ipre_command_history_path() {
+    REPLY="${IPRE_COMMAND_HISTORY_FILE:-${IPRE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/ipre}/commands.history-v1}"
+}
+
+ipre_command_history_save() {
+    [[ -n "$1" ]] || return 0
+    ipre_command_history_path
+    local history_file="$REPLY"
+    mkdir -p -- "${history_file:h}" || return 1
+    ipre_text_escape "$1"
+    (umask 077; printf '%s\n' "$REPLY" >> "$history_file")
+}
+
+# The command is intentional shell code; selected paths are positional arguments.
+ipre_command_run_selected() {
+    local mode="$1" command_text="$2" item failed=0
+    shift 2
+    case "$mode" in
+        all) zsh -c "$command_text" ipre-command "$@" || failed=1 ;;
+        each)
+            for item in "$@"; do
+                zsh -c "$command_text" ipre-command "$item" || failed=1
+            done
+            ;;
+        *) return 1 ;;
+    esac
+    return "$failed"
+}
+
+ipre_palette_do_history_cmd() {
+    [[ $# -gt 0 && -n "$1" ]] || return 0
+    cd -- "$IPRE_CWD" || return 1
+    setopt localoptions localtraps
+    trap 'return 130' INT
+    local command_tty_state
+    command_tty_state=$(stty -g </dev/tty) || return 1
+    # fzf/ZLE may leave output processing disabled; commands need LF -> CRLF.
+    stty opost onlcr </dev/tty || return 1
+    enter_alt_screen
+    {
+        ipre_command_history_path
+        local history_file="$REPLY" selected id line cmd_str mode result=0
+        local -a entries=() choices=() history_commands=()
+        local -A seen=()
+        [[ -f "$history_file" ]] && entries=("${(@f)$(<"$history_file")}")
+        for (( id=${#entries}; id>=1; id-- )); do
+            line="${entries[id]}"
+            [[ -n "$line" && -z "${seen[$line]}" ]] || continue
+            ipre_text_unescape "$line" || continue
+            seen[$line]=1
+            history_commands+=("$REPLY")
+            choices+=("${#history_commands}"$'\t'"$line")
+        done
+        if (( ! ${#history_commands} )); then
+            print_warn "No ipre command history. Execute a shell command from the palette first."
+            printf 'Press any key to return...'
+            read -k 1 -s _ </dev/tty
+            return 0
+        fi
+        selected=$(printf '%s\n' "${choices[@]}" | fzf --height=99% --min-height=1 --reverse \
+            --scheme=history --no-sort --delimiter=$'\t' --with-nth=2 --prompt 'Command history > ') || return 0
+        id="${selected%%$'\t'*}"
+        [[ "$id" == <-> ]] && (( id>=1 && id<=${#history_commands} )) || return 1
+        cmd_str="${history_commands[id]}"
+        [[ "$cmd_str" == *'"$@"'* ]] || cmd_str+=' "$@"'
+        printf '%s\n' 'Edit the command and remove old file arguments if needed.'
+        printf '%s\n' 'Place "$@" where the selected paths belong, including within pipelines.'
+        vared -p 'Command: ' cmd_str </dev/tty || return 0
+        [[ -n "$cmd_str" ]] || return 0
+        selected=$(printf '%s\n' $'all\tAll selected files in one invocation' \
+            $'each\tOne invocation per selected file' | fzf --height=99% --min-height=1 \
+            --reverse --delimiter=$'\t' --with-nth=2 --prompt 'Apply command > ') || return 0
+        mode="${selected%%$'\t'*}"
+        [[ "$mode" == all || "$mode" == each ]] || return 0
+        ipre_command_history_save "$cmd_str" || return 1
+        ipre_command_run_selected "$mode" "$cmd_str" "$@" </dev/tty >/dev/tty 2>&1 || result=$?
+        printf '\nCommand finished (status %d). Press any key to return...' "$result"
+        read -k 1 -s _ </dev/tty
+        return "$result"
+    } always {
+        stty "$command_tty_state" </dev/tty
+        leave_alt_screen
+    }
+}
+
+ipre_palette_do_shell_cmd() {
+    cd "$IPRE_CWD" || exit 0
+    # Let vared report cancellation so the always block can restore the screen.
+    setopt localoptions localtraps
+    trap 'return 130' INT
+    local command_tty_state
+    command_tty_state=$(stty -g </dev/tty) || return 1
+    stty opost onlcr </dev/tty || return 1
+    enter_alt_screen
+    {
+        print_title "Execute Shell Command"
+
+        local cmd_str
+        if ! vared -p "Enter command: " cmd_str </dev/tty; then
+            printf '\n%bSkipping (Aborted by user)%b\n' "$C_YLW" "$C_RST"
+            return 0
+        fi
+        [[ -z "$cmd_str" ]] && return 0
+
+        printf "\nSelect execution mode:\n"
+        printf "  [%b b %b] Blocking (Runs in foreground, waits for completion)\n" "$C_YLW" "$C_RST"
+        printf "  [%b n %b] Non-blocking (Runs in background, closes instantly)\n" "$C_CYN" "$C_RST"
+        printf "Choice: "
+    
+        local mode
+        read -k 1 -s mode < /dev/tty
+        echo ""
+
+        case "$mode" in
+            b|B)
+                ipre_command_history_save "$cmd_str" || return 1
+                clear
+                print_title "Command Output"
+                # Run in foreground and keep stdout/stderr on terminal
+                eval "$cmd_str" 2>&1
+                printf "\n%bCommand finished.%b Press any key to return..." "$C_GRN" "$C_RST"
+                read -k 1 -s _ < /dev/tty
+                ;;
+            n|N)
+                ipre_command_history_save "$cmd_str" || return 1
+                # Run in background, redirect outputs to prevent terminal corruption
+                eval "$cmd_str" >/dev/null 2>&1 &
+                clear
+                printf "%bCommand dispatched to background.%b\n" "$C_GRN" "$C_RST"
+                sleep 0.5
+                ;;
+            *)
+                print_warn "Invalid mode. Aborted."
+                sleep 0.5
+                ;;
+        esac
+    } always {
+        stty "$command_tty_state" </dev/tty
+        leave_alt_screen
+    }
+}
+
+ipre_palette_do_git_add() {
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        git add "$@"
+    fi
+}
+
+ipre_trash_remove_empty_entry() {
+    local entry="$1"
+    # Never discard metadata while an entry still contains data.
+    if [[ -d "$entry/payload" ]]; then
+        rmdir -- "$entry/payload" || return 1
+    fi
+    rm -f -- "$entry/origin" || return 1
+    rmdir -- "$entry"
+}
+
+ipre_palette_do_trash_empty() {
+    enter_alt_screen
+    {
+        local result=0
+        if [[ -n "$IPRE_TRASH_DIR" && -d "$IPRE_TRASH_DIR" ]]; then
+            if rm -rf -- "$IPRE_TRASH_DIR" && mkdir -p "$IPRE_TRASH_DIR"; then
+                printf "%bTrash bin emptied.%b\n" "$C_GRN" "$C_RST"
+            else
+                print_warn "Failed to empty the trash bin."
+                result=1
+            fi
+        else
+            print_warn "Trash directory is not set or invalid."
+            result=1
+        fi
+        sleep 0.5
+        return "$result"
+    } always {
+        leave_alt_screen
+    }
+}
+
+ipre_palette_do_trash_restore() {
+    enter_alt_screen
+    {
+        local -a trash_dirs=() trash_items=() trash_origins=() contents=() fzf_input=()
+        local entry raw original ts display_date line_str
+        for entry in "$IPRE_TRASH_DIR"/entry-<->.??????(N/); do
+            contents=("$entry/payload"/*(ND))
+            (( ${#contents[@]} == 1 )) || continue
+            [[ -f "$entry/origin" ]] || continue
+            IFS= read -r -d '' original < "$entry/origin" || continue
+            [[ "$original" == /* && "${original:t}" == "${contents[1]:t}" ]] || continue
+            trash_dirs+=("$entry")
+            trash_items+=("${contents[1]}")
+            trash_origins+=("$original")
+            raw="${entry:t}"
+            ts="${${raw#entry-}%%.*}"
+            display_date="$(date -d "@$ts" "+%Y-%m-%d %H:%M:%S" 2>/dev/null)"
+            [[ -z "$display_date" ]] && display_date="$ts"
+
+            # Select paths by numeric ID; display control characters as printable text.
+            ipre_text_escape "$original"
+            printf -v line_str "[%s]\t%s\t%d" "$display_date" "$REPLY" "${#trash_items[@]}"
+            fzf_input+=("$line_str")
+        done
+
+        if (( ${#trash_items[@]} == 0 )); then
+            print_warn "Trash bin is empty."
+            sleep 0.5
+            return 0
+        fi
+
+        # Stay below 100% so fzf does not switch to its own alternate screen.
+        local selected
+        selected=$(printf "%s\n" "${fzf_input[@]}" | fzf --height=99% --min-height=1 --prompt "Restore > " --multi --reverse --delimiter=$'\t' --with-nth=1,2)
+        [[ -z "$selected" ]] && return 0
+
+        local line id source target_name target_dir dest counter base ext
+        local restored=0 failed=0
+        for line in "${(@f)selected}"; do
+            id="${line##*$'\t'}"
+            if [[ "$id" != <-> ]] || (( id < 1 || id > ${#trash_items[@]} )); then
+                printf '%b[Error] Invalid trash selection.%b\n' "$C_RED" "$C_RST" >&2
+                (( ++failed ))
+                continue
+            fi
+            source="${trash_items[$id]}"
+            dest="${trash_origins[$id]}"
+            target_name="${dest:t}"
+            target_dir="${dest:h}"
+            if ! mkdir -p -- "$target_dir"; then
+                printf '%b[Error] Cannot recreate the original directory "%s".%b\n' "$C_RED" "$target_dir" "$C_RST" >&2
+                (( ++failed ))
+                continue
+            fi
+
+            counter=1
+            ext="${target_name:e}"
+            base="${target_name:r}"
+
+            if [[ -z "$base" ]]; then
+                base="$target_name"
+                ext=""
+            else
+                [[ -n "$ext" ]] && ext=".$ext"
+            fi
+
+            while [[ -e "$dest" || -L "$dest" ]]; do
+                dest="$target_dir/${base}_restored${counter}${ext}"
+                ((counter++))
+            done
+
+            if mv -- "$source" "$dest"; then
+                ipre_trash_remove_empty_entry "${trash_dirs[$id]}"
+                (( ++restored ))
+            else
+                printf '%b[Error] Failed to restore "%s".%b\n' "$C_RED" "${trash_origins[$id]}" "$C_RST" >&2
+                (( ++failed ))
+            fi
+        done
+        if (( failed == 0 )); then
+            printf "%bRestored: %d item(s).%b\n" "$C_GRN" "$restored" "$C_RST"
+        else
+            printf "%bRestored: %d item(s); failed: %d.%b\n" "$C_YLW" "$restored" "$failed" "$C_RST"
+        fi
+        sleep 0.5
+        (( failed == 0 ))
+    } always {
+        leave_alt_screen
+    }
+}
+
+# =========================================================
+# Main Command Palette Entry (UI)
+# =========================================================
+
+ipre_action_command_palette() {
+    cd "$IPRE_CWD" || exit 0
+    enter_alt_screen
+
+    local -a options=(
+        "content  | [Clip]    Copy file contents (concatenate selected files)"
+        "empty    | [Trash]   Empty hidden trash bin"
+        "restore  | [Trash]   Restore files from trash"
+        "chmod    | [System]  Make executable (+x)"
+        "open     | [System]  Open with default GUI app"
+        "openwith | [System]  Open with..."
+        "shell    | [System]  Execute shell command (Unsafe)"
+        "history  | [System]  Run ipre command history on selected files"
+        "symlink  | [System]  Create symbolic links"
+        "checksum | [System]  Calculate MD5/SHA256 hash"
+        "gitadd   | [VC-Git]  Add selected to staging"
+        "compress | [Archive] Compress selected items"
+        "extract  | [Archive] Extract archive here"
+    )
+
+    local choice
+    choice=$(printf "%s\n" "${options[@]}" | fzf --height=99% --min-height=1 --prompt "Command > " --reverse --delimiter="|" --with-nth=2)
+    leave_alt_screen
+
+    [[ -z "$choice" ]] && exit 0
+    printf "" > "$IPRE_SELECT_FILE"
+
+    local cmd_id="${choice%% |*}"
+    cmd_id="${cmd_id// /}"
+    case "$cmd_id" in
+        chmod)    ipre_palette_do_chmod        "$@" ;;
+        open)     ipre_palette_do_open         "$@" ;;
+        openwith) ipre_palette_do_open_with    "$@" ;;
+        shell)    ipre_palette_do_shell_cmd    "$@" ;;
+        history)  ipre_palette_do_history_cmd  "$@" ;;
+        symlink)  ipre_palette_do_symlink      "$@" ;;
+        content)  ipre_palette_do_copy_content "$@" ;;
+        compress) ipre_palette_do_compress     "$@" ;;
+        extract)  ipre_palette_do_extract      "$@" ;;
+        gitadd)   ipre_palette_do_git_add      "$@" ;;
+        checksum) ipre_palette_do_checksum     "$@" ;;
+        empty)    ipre_palette_do_trash_empty       ;;
+        restore)  ipre_palette_do_trash_restore     ;;
+        *)        print_warn "Unknown command ID: $cmd_id"; sleep 1 ;;
+    esac
+}
